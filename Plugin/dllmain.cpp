@@ -1,4 +1,4 @@
-// dllmain.cpp —— DLL 入口
+﻿// dllmain.cpp —— DLL 入口
 //
 // 移植自 FufuLauncher.UnlockerIsland/Core/dllmain.cpp
 // 重要改动：

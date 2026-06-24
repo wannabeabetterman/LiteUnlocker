@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <string>
 
 // 特征码扫描器：在主模块内存里按字节序列定位游戏函数

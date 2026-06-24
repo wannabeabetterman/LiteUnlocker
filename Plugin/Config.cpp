@@ -1,4 +1,4 @@
-#include "Config.h"
+﻿#include "Config.h"
 #include <string>
 #include <cstdio>
 #include <Windows.h>

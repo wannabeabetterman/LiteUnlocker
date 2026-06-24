@@ -1,4 +1,4 @@
-// Hooks.cpp —— FPS 解锁 + FOV 修改 的核心实现
+﻿// Hooks.cpp —— FPS 解锁 + FOV 修改 的核心实现
 //
 // 移植自 FufuLauncher.UnlockerIsland/Core/Hooks.cpp
 // 只保留 FPS / FOV 两个功能，删掉了 FreeCam/Paimon/隐藏UI/伤害数字等所有无关逻辑
@@ -14,6 +14,7 @@
 #include <Windows.h>
 #include <iostream>
 #include <string>
+#include <type_traits>
 
 #include "MinHook.h"
 #include "Scanner.h"
@@ -53,7 +54,10 @@ namespace Hooks {
     // SEH 保护下调用原函数，防止目标地址无效时整个崩掉
     template <typename Fn, typename... Args>
     static auto SafeInvoke(Fn fn, Args&&... args) -> decltype(fn(args...)) {
-        if (!fn) return (decltype(fn(args...)))0;
+        // 仅对函数指针做空指针检查（lambda/仿函数总是可调用的，无法用 ! 判空）
+        if constexpr (std::is_pointer_v<Fn> || std::is_member_pointer_v<Fn>) {
+            if (!fn) return (decltype(fn(args...)))0;
+        }
         __try {
             return fn(std::forward<Args>(args)...);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -183,13 +187,13 @@ namespace Hooks {
         }
 
         // 一次性启用所有已创建的 hook
-        MH_EnableHook(MH_ALL_TARGETS);
+        MH_EnableHook(MH_ALL_HOOKS);
         std::cout << "[Unlocker] Hooks 初始化完成\n";
         return true;
     }
 
     void Uninit() {
-        MH_DisableHook(MH_ALL_TARGETS);
+        MH_DisableHook(MH_ALL_HOOKS);
         MH_Uninitialize();
     }
 

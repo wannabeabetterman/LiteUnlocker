@@ -13,13 +13,31 @@
 #include <shlwapi.h>
 #include <string>
 #include <vector>
+#include <sstream>
 
-#define LAUNCHER_EXPORTS
 #include "Launcher.h"
 
 #pragma comment(lib, "shlwapi.lib")
 
 const wchar_t* PLUGINS_SUBDIR_NAME = L"Plugins";
+
+static void SetWin32Error(
+    wchar_t* errorMessage, int errorMessageSize,
+    const wchar_t* operation, DWORD errorCode)
+{
+    if (!errorMessage || errorMessageSize <= 0) return;
+
+    wchar_t systemMessage[256] = {};
+    FormatMessageW(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, errorCode, 0, systemMessage,
+        _countof(systemMessage), nullptr);
+
+    std::wstringstream message;
+    message << operation << L" (Win32 " << errorCode << L")";
+    if (systemMessage[0] != L'\0') message << L": " << systemMessage;
+    wcsncpy_s(errorMessage, errorMessageSize, message.str().c_str(), _TRUNCATE);
+}
 
 static std::string WStrToUtf8(const std::wstring& w) {
     if (w.empty()) return std::string();
@@ -154,7 +172,8 @@ extern "C" LAUNCHER_API int LaunchGameAndInject(
     PROCESS_INFORMATION pi = {};
     if (!CreateProcessW(gamePath, pCmdLine, nullptr, nullptr, FALSE,
                         CREATE_SUSPENDED, nullptr, workingDir.c_str(), &si, &pi)) {
-        if (errorMessage) wcsncpy_s(errorMessage, errorMessageSize, L"创建进程失败", _TRUNCATE);
+        const DWORD errorCode = GetLastError();
+        SetWin32Error(errorMessage, errorMessageSize, L"CreateProcessW failed", errorCode);
         if (pCmdLine) delete[] pCmdLine;
         return 3;
     }

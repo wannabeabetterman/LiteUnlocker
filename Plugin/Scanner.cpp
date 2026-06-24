@@ -1,4 +1,4 @@
-#include "Scanner.h"
+﻿#include "Scanner.h"
 #include <Windows.h>
 #include <Psapi.h>
 #include <sstream>
