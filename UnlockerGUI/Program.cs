@@ -9,6 +9,8 @@
 // 运行前需确保 Launcher.dll 和 Plugins\SimpleUnlocker.dll 在本 exe 同目录
 
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -54,6 +56,7 @@ internal sealed class MainForm : Form
     private readonly CheckBox _enableVSync = new();
     private readonly Button _startBtn = new();
     private readonly Label _statusLabel = new();
+    private bool _configReady;
 
     public MainForm()
     {
@@ -65,6 +68,9 @@ internal sealed class MainForm : Form
         MaximizeBox = false;
 
         BuildUi();
+        LoadConfig();
+        WireAutoSave();
+        _configReady = true;
     }
 
     private void BuildUi()
@@ -146,6 +152,18 @@ internal sealed class MainForm : Form
         });
     }
 
+    private void WireAutoSave()
+    {
+        _enableFps.CheckedChanged += (_, _) => TrySaveConfig();
+        _fpsBox.ValueChanged += (_, _) => TrySaveConfig();
+        _enableFov.CheckedChanged += (_, _) => TrySaveConfig();
+        _fovBox.ValueChanged += (_, _) => TrySaveConfig();
+        _fovSpeedBar.ValueChanged += (_, _) => TrySaveConfig();
+        _enableVSync.CheckedChanged += (_, _) => TrySaveConfig();
+        _gamePathBox.Leave += (_, _) => TrySaveConfig();
+        FormClosing += (_, _) => TrySaveConfig();
+    }
+
     // ---- 浏览选游戏 exe ----
     private void OnBrowse(object? s, EventArgs e)
     {
@@ -155,7 +173,10 @@ internal sealed class MainForm : Form
             Filter = "游戏程序 (*.exe)|*.exe|所有文件 (*.*)|*.*"
         };
         if (dlg.ShowDialog() == DialogResult.OK)
+        {
             _gamePathBox.Text = dlg.FileName;
+            TrySaveConfig();
+        }
     }
 
     // ---- 启动 ----
@@ -223,6 +244,9 @@ internal sealed class MainForm : Form
         var sb = new StringBuilder();
         sb.AppendLine("; 由 UnlockerGUI 自动生成");
         sb.AppendLine();
+        sb.AppendLine("[GamePath]");
+        sb.AppendLine($"Value={_gamePathBox.Text.Trim()}");
+        sb.AppendLine();
         sb.AppendLine("[DebugConsole]");
         sb.AppendLine("Value=0");
         sb.AppendLine();
@@ -239,17 +263,90 @@ internal sealed class MainForm : Form
         sb.AppendLine($"Value={(_enableFov.Checked ? 1 : 0)}");
         sb.AppendLine();
         sb.AppendLine("[FovValue]");
-        sb.AppendLine($"Value={_fovBox.Value:F1}");
+        sb.AppendLine($"Value={_fovBox.Value.ToString("F1", CultureInfo.InvariantCulture)}");
         sb.AppendLine();
         sb.AppendLine("[FovTransitionSpeed]");
         // 滑块 0~100 映射到 0.00~1.00
-        sb.AppendLine($"Value={(_fovSpeedBar.Value / 100.0):F2}");
+        sb.AppendLine($"Value={(_fovSpeedBar.Value / 100.0).ToString("F2", CultureInfo.InvariantCulture)}");
         sb.AppendLine();
         sb.AppendLine("[FovLimitCheck]");
         sb.AppendLine("Value=1");
 
         File.WriteAllText(cfgPath, sb.ToString(), new UTF8Encoding(false));
     }
+
+    private void LoadConfig()
+    {
+        string cfgPath = Path.Combine(AppContext.BaseDirectory, "Plugins", "config.ini");
+        if (!File.Exists(cfgPath)) return;
+
+        try
+        {
+            var values = ReadIniValues(cfgPath);
+            _gamePathBox.Text = GetValue(values, "GamePath", "");
+            _enableFps.Checked = GetBool(values, "FpsUnlock", _enableFps.Checked);
+            SetNumericValue(_fpsBox, GetDecimal(values, "TargetFps", _fpsBox.Value));
+            _enableVSync.Checked = GetBool(values, "VSync", _enableVSync.Checked);
+            _enableFov.Checked = GetBool(values, "FovUnlock", _enableFov.Checked);
+            SetNumericValue(_fovBox, GetDecimal(values, "FovValue", _fovBox.Value));
+
+            decimal speed = GetDecimal(values, "FovTransitionSpeed", _fovSpeedBar.Value / 100m);
+            int sliderValue = (int)Math.Round(speed * 100m);
+            _fovSpeedBar.Value = Math.Clamp(sliderValue, _fovSpeedBar.Minimum, _fovSpeedBar.Maximum);
+            _fovSpeedVal.Text = (_fovSpeedBar.Value / 100.0).ToString("0.00");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"读取上次配置失败：{ex.Message}", error: true);
+        }
+    }
+
+    private void TrySaveConfig()
+    {
+        if (!_configReady) return;
+        try
+        {
+            WriteConfig();
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"保存配置失败：{ex.Message}", error: true);
+        }
+    }
+
+    private static Dictionary<string, string> ReadIniValues(string path)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string section = "";
+        foreach (string rawLine in File.ReadLines(path, Encoding.UTF8))
+        {
+            string line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith(';') || line.StartsWith('#')) continue;
+            if (line.StartsWith('[') && line.EndsWith(']'))
+            {
+                section = line[1..^1].Trim();
+                continue;
+            }
+
+            int equals = line.IndexOf('=');
+            if (equals > 0 && line[..equals].Trim().Equals("Value", StringComparison.OrdinalIgnoreCase))
+                values[section] = line[(equals + 1)..].Trim();
+        }
+        return values;
+    }
+
+    private static string GetValue(Dictionary<string, string> values, string section, string fallback) =>
+        values.TryGetValue(section, out string? value) ? value : fallback;
+
+    private static bool GetBool(Dictionary<string, string> values, string section, bool fallback) =>
+        int.TryParse(GetValue(values, section, fallback ? "1" : "0"), out int value) ? value != 0 : fallback;
+
+    private static decimal GetDecimal(Dictionary<string, string> values, string section, decimal fallback) =>
+        decimal.TryParse(GetValue(values, section, ""), NumberStyles.Float, CultureInfo.InvariantCulture, out decimal value)
+            ? value : fallback;
+
+    private static void SetNumericValue(NumericUpDown control, decimal value) =>
+        control.Value = Math.Clamp(value, control.Minimum, control.Maximum);
 
     private void SetStatus(string text, bool error = false)
     {
