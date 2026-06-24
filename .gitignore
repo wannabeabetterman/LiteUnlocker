@@ -1,0 +1,42 @@
+# 编译产物
+build/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.obj
+*.lib
+*.exp
+
+# Visual Studio 临时文件
+.vs/
+*.user
+*.suo
+*.aps
+*.tlog
+*.idb
+*.opendb
+*.db
+*.db-shm
+*.db-wal
+
+# C# / .NET
+bin/
+obj/
+project.lock.json
+*.nuget.props
+
+# 日志（运行时生成）
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# 但保留运行必需的第三方库（MinHook）
+!Plugin/MinHook/*.lib
+!Plugin/MinHook/*.h
