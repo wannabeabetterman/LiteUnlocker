@@ -26,6 +26,7 @@ struct ModConfig {
 
     // --- UI 体验优化 ---
     bool enable_remove_team_anim = false; // [RemoveTeamAnim] 移除队伍切换动画（直接显示队伍页）
+    bool hide_uid = false;                // [HideUID] 隐藏屏幕上的 UID 水印（直播/截图保护隐私）
 
     // --- 调试 ---
     bool debug_console = false;         // [DebugConsole]  是否弹控制台输出日志

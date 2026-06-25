@@ -21,6 +21,9 @@
 #include "Config.h"
 #include "Hooks.h"
 
+// il2cpp 字符串不透明类型：只作为指针传递，不需要其内部结构
+struct Il2CppString;
+
 namespace Hooks {
 
     // ===== 原函数指针类型 =====
@@ -34,6 +37,11 @@ namespace Hooks {
     typedef bool (WINAPI* tCheckCanEnter)();      // 检查当前能否进入队伍
     typedef void (WINAPI* tOpenTeamPage)(bool);   // 直接打开队伍页面（跳过动画）
 
+    // ===== UI 对象操作（隐藏 UID 等）=====
+    typedef Il2CppString* (WINAPI* tFindString)(const char*);  // 按路径找字符串对象
+    typedef void* (WINAPI* tFindGameObject)(Il2CppString*);    // 按路径找 UI 对象
+    typedef void (WINAPI* tSetActive)(void*, bool);           // 设置对象显示/隐藏
+
     // ===== 原函数地址（由 MinHook 在安装 hook 时填入）=====
     // 注意：这些必须是普通裸指针，因为 MH_CreateHook 的第三参数要求 void**，
     // MinHook 会把原始函数地址直接写到这里。不能用 std::atomic 包装（布局不符）。
@@ -46,6 +54,11 @@ namespace Hooks {
     static tOpenTeam       o_OpenTeam      = nullptr;
     static tCheckCanEnter  p_CheckCanEnter = nullptr;
     static tOpenTeamPage   p_OpenTeamPage  = nullptr;
+
+    // UI 对象操作：只扫描拿地址（隐藏 UID 用，不 hook）
+    static tFindString     p_FindString     = nullptr;
+    static tFindGameObject p_FindGameObject = nullptr;
+    static tSetActive      p_SetActive      = nullptr;
 
     // 游戏主循环是否已就绪（ChangeFOV 第一次被调用即代表游戏跑起来了）
     static volatile bool g_GameUpdateInit = false;
@@ -65,6 +78,14 @@ namespace Hooks {
     static const char* PAT_OpenTeam      = "48 83 EC ? 80 3D ? ? ? ? 00 75 ? 48 8B 0D ? ? ? ? 80 B9 ? ? ? ? 00 0F 84 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 84 C0 75";
     static const char* PAT_CheckCanEnter = "56 48 81 ec 80 00 00 00 80 3d ? ? ? ? 00 0f 84 ? ? ? ? 80 3d ? ? ? ? 00";
     static const char* PAT_OpenTeamPage  = "56 57 53 48 83 ec 20 89 cb 80 3d ? ? ? ? 00 74 7a 80 3d ? ? ? ? 00 48 8b 05";
+
+    // UI 对象操作特征码（绝对地址）
+    static const char* PAT_FindString     = "56 48 83 ec 20 48 89 ce e8 ? ? ? ? 48 89 f1 89 c2 48 83 c4 20 5e e9 ? ? ? ? cc cc cc cc";
+    static const char* PAT_FindGameObject = "40 53 48 83 EC ? 48 89 4C 24 ? 48 8D 54 24 ? 48 8D 4C 24 ? E8 ? ? ? ? 48 8B 08 48 85 C9 75 ? 48 8D 48 ? E8 ? ? ? ? 48 8B 4C 24 ? 48 8B D8 48 85 C9 74 ? 48 83 7C 24 ? 00 76";
+    static const char* PAT_SetActive      = "E8 ? ? ? ? 48 8B 56 ? 48 85 D2 0F 84 ? ? ? ? 80 3D ? ? ? ? 0 0F 85 ? ? ? ? 48 89 D1 E8 ? ? ? ? 48 85 C0 0F 84 ? ? ? ? 48 89 C1";
+
+    // 屏幕上 UID 水印的 UI 路径（原仓库 GameStrings::UIDPathWatermark）
+    static const char* UID_PATH_WATERMARK = "/BetaWatermarkCanvas(Clone)/Panel/TxtUID";
 
     // SEH 保护下调用原函数，防止目标地址无效时整个崩掉
     template <typename Fn, typename... Args>
@@ -106,6 +127,9 @@ namespace Hooks {
     int32_t WINAPI hk_ChangeFov(void* __this, float value) {
         g_GameUpdateInit = true;
         auto& cfg = Config::Get();
+
+        // 主循环：定期隐藏 UID 水印（函数内部有 2 秒节流）
+        UpdateHideUID();
 
         // --- FPS 解锁 ---
         // 关闭垂直同步（否则显示器刷新率会卡住帧率上限）
@@ -164,6 +188,33 @@ namespace Hooks {
         }
         // 功能关闭或无法跳过时，走原始流程
         if (o_OpenTeam) SafeInvoke(o_OpenTeam);
+    }
+
+    // =========================================================
+    //  隐藏 UID 水印（直播/截图隐私保护）
+    // =========================================================
+    // 找到屏幕右上角 UID 水印的 UI 对象，将其隐藏。
+    // 只改本地显示，服务器侧真实 UID 不变，联机队友仍能看到正确 UID。
+    // 非 hook，靠主循环定期轮询调用（节流 2 秒一次，避免每帧查找）。
+    static float g_LastHideUidCheck = 0.0f;
+    void UpdateHideUID() {
+        if (!Config::Get().hide_uid) return;
+        if (!p_FindString || !p_FindGameObject || !p_SetActive) return;
+
+        // 节流：每 2 秒检查一次（原仓库同样的设计）
+        float now = (float)clock() / CLOCKS_PER_SEC;
+        if (now - g_LastHideUidCheck < 2.0f) return;
+        g_LastHideUidCheck = now;
+
+        SafeInvoke([&] {
+            auto strObj = p_FindString(UID_PATH_WATERMARK);
+            if (strObj) {
+                void* obj = p_FindGameObject(strObj);
+                if (obj) {
+                    p_SetActive(obj, false);   // 隐藏该 UI 对象
+                }
+            }
+        });
     }
 
     // =========================================================
@@ -241,6 +292,27 @@ namespace Hooks {
             std::cout << "[Unlocker] [OK] OpenTeam hooked\n";
         } else {
             std::cout << "[Unlocker] [WARN] 未找到 OpenTeam 特征码\n";
+        }
+
+        // --- 6. UI 对象操作（隐藏 UID 用，绝对地址，只扫描不 hook）---
+        void* scanFindStr = Scanner::ScanMainMod(PAT_FindString);
+        if (scanFindStr) {
+            p_FindString = reinterpret_cast<tFindString>(scanFindStr);
+            std::cout << "[Unlocker] [OK] FindString resolved\n";
+        }
+        void* scanFindObj = Scanner::ScanMainMod(PAT_FindGameObject);
+        if (scanFindObj) {
+            p_FindGameObject = reinterpret_cast<tFindGameObject>(scanFindObj);
+            std::cout << "[Unlocker] [OK] FindGameObject resolved\n";
+        }
+        void* scanSetActive = Scanner::ScanMainMod(PAT_SetActive);
+        if (scanSetActive) {
+            // SetActive 特征码是 E8 相对调用型，需解析
+            void* target = Scanner::ResolveRelative(scanSetActive, 1, 5);
+            if (target) {
+                p_SetActive = reinterpret_cast<tSetActive>(target);
+                std::cout << "[Unlocker] [OK] SetActive resolved\n";
+            }
         }
 
         // 一次性启用所有已创建的 hook

@@ -60,6 +60,7 @@ internal sealed class MainForm : Form
     private readonly ModernCheckBox _enableFov = new();
     private readonly ModernCheckBox _enableVSync = new();
     private readonly ModernCheckBox _enableRemoveTeamAnim = new();
+    private readonly ModernCheckBox _enableHideUid = new();
     private readonly AccentButton _startBtn = new();
     private readonly Label _statusLabel = new();
     private readonly LinkLabel _gradientToggle = new();
@@ -69,7 +70,7 @@ internal sealed class MainForm : Form
     {
         Text = "LiteUnlocker";
         Width = 560;
-        Height = 600;
+        Height = 640;
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -184,9 +185,11 @@ internal sealed class MainForm : Form
         y += card2.Height + 16;
 
         // --- UI 卡片 ---
-        var card3 = new CardPanel { Left = 24, Top = y, Width = 504, Height = 56 };
+        var card3 = new CardPanel { Left = 24, Top = y, Width = 504, Height = 88 };
         cy = 14;
         InitCheckBox(_enableRemoveTeamAnim, "Remove team-switch animation  (skip character showcase)",
+                     card3, 22, ref cy);
+        InitCheckBox(_enableHideUid, "Hide UID watermark  (privacy for streaming / screenshots)",
                      card3, 22, ref cy);
         card3.Height = cy + 14;
         Controls.Add(card3);
@@ -272,6 +275,7 @@ internal sealed class MainForm : Form
         _fovSpeedBar.ValueChanged += (_, _) => TrySaveConfig();
         _enableVSync.CheckedChanged += (_, _) => TrySaveConfig();
         _enableRemoveTeamAnim.CheckedChanged += (_, _) => TrySaveConfig();
+        _enableHideUid.CheckedChanged += (_, _) => TrySaveConfig();
         _gamePathBox.Leave += (_, _) => TrySaveConfig();
         FormClosing += (_, _) => TrySaveConfig();
     }
@@ -367,6 +371,9 @@ internal sealed class MainForm : Form
         sb.AppendLine();
         sb.AppendLine("[RemoveTeamAnim]");
         sb.AppendLine($"Value={(_enableRemoveTeamAnim.Checked ? 1 : 0)}");
+        sb.AppendLine();
+        sb.AppendLine("[HideUID]");
+        sb.AppendLine($"Value={(_enableHideUid.Checked ? 1 : 0)}");
 
         File.WriteAllText(cfgPath, sb.ToString(), new UTF8Encoding(false));
     }
@@ -392,6 +399,7 @@ internal sealed class MainForm : Form
             _fovSpeedVal.Text = (_fovSpeedBar.Value / 100.0).ToString("0.00");
 
             _enableRemoveTeamAnim.Checked = GetBool(values, "RemoveTeamAnim", _enableRemoveTeamAnim.Checked);
+            _enableHideUid.Checked = GetBool(values, "HideUID", _enableHideUid.Checked);
         }
         catch (Exception ex)
         {
