@@ -1,11 +1,14 @@
 # SimpleUnlocker
 
-从 [FufuLauncher.UnlockerIsland](https://github.com/FufuLauncher/FufuLauncher.UnlockerIsland) 剥离出的**极简版**，只保留两个功能：
+从 [FufuLauncher.UnlockerIsland](https://github.com/FufuLauncher/FufuLauncher.UnlockerIsland) 剥离出的**精简版**，专注体验优化：
 
-- **FPS 解锁**（解除游戏帧率上限）
-- **FOV 修改**（修改摄像机视场角）
+- **FPS 解锁**（解除游戏帧率上限，目标可调）
+- **FOV 修改**（修改摄像机视场角，含**平滑过渡**——切场景/队伍时丝滑拉开）
+- **移除队伍切换动画**（跳过角色展示，直接显示队伍页）
+- **隐藏 UID 水印**（隐藏屏幕右上角 UID，直播/截图隐私保护；仅本地显示，不影响联机）
+- **深色现代 GUI**（青绿强调色，高 DPI 支持，卡片渐变层次）
 
-删掉了原仓库的 FreeCam、派蒙、隐藏UI、伤害数字、联网授权验证等所有无关逻辑。
+删掉了原仓库的 FreeCam、派蒙、隐藏UI、伤害数字、F12合成台、联网授权验证等所有无关或高风险逻辑。
 
 ---
 
@@ -25,7 +28,7 @@ D:\zhj\
 ├── Plugin\                         ← 功能插件（被注入到游戏进程）
 │   ├── SimpleUnlocker.vcxproj      ← 插件工程
 │   ├── dllmain.cpp                 ← DLL 入口（去掉了原版的联网授权验证）
-│   ├── Hooks.cpp / .h              ← FPS/FOV Hook + 反检测核心
+│   ├── Hooks.cpp / .h              ← FPS/FOV Hook + 反检测 + 队伍动画
 │   ├── Scanner.cpp / .h            ← 特征码扫描器
 │   ├── Config.cpp / .h             ← 配置读取
 │   ├── config.ini                  ← 配置示例
@@ -36,9 +39,10 @@ D:\zhj\
 │   ├── Launcher.vcxproj
 │   ├── Launcher.cpp                ← CreateProcess挂起 + LoadLibrary注入
 │   └── Launcher.h
-└── UnlockerGUI\                    ← 图形启动器（C# WinForms）
+└── UnlockerGUI\                    ← 图形启动器（C# WinForms，深色主题）
     ├── UnlockerGUI.csproj
-    └── Program.cs                  ← 选路径 + 填FPS/FOV + 点启动
+    ├── Program.cs                  ← UI + 业务逻辑（自绘卡片/按钮/复选框）
+    └── app.manifest                ← 高 DPI 感知声明（保证高分屏不模糊）
 ```
 
 ## 编译
@@ -113,8 +117,15 @@ UI 上放一个"选择游戏路径"按钮 + "启动"按钮即可。
 
 ## 图形启动器 UnlockerGUI（已内置）
 
-仓库已自带一个 C# WinForms 启动器 `UnlockerGUI\`，免去自己写。它做三件事：
-选游戏路径 → 填 FPS/FOV → 点"启动"自动写 config.ini 并调用 `LaunchGameAndInject`。
+仓库已自带一个 C# WinForms 启动器 `UnlockerGUI\`，采用**深色现代面板**设计（青绿强调色 #14B8A6，自绘圆角卡片/按钮/复选框，高 DPI 支持）。
+
+功能：选游戏路径 → 勾选/调节各项（FPS/FOV/过渡速度/移除队伍动画）→ 点 "LAUNCH GAME" 自动写 config.ini 并调用 `LaunchGameAndInject`。
+
+界面特性：
+- **分组卡片**：Graphics / Camera / UI 三个功能区，自绘圆角 + 渐变层次
+- **自动保存**：改动任何控件即时写盘，下次启动自动恢复上次配置
+- **渐变开关**：右上角 "◐ Gradient / ◑ Flat" 链接，切换卡片的层次感渐变效果
+- **高 DPI**：配合 `app.manifest`（PerMonitorV2 声明），2K/4K 屏不模糊
 
 ### 编译（需 .NET 8 SDK）
 
@@ -133,6 +144,8 @@ dotnet publish -c Release
 产物：`UnlockerGUI\bin\Release\net8.0-windows\win-x64\publish\UnlockerGUI.exe`（单文件、自包含，目标机无需装 .NET）
 
 > 如果没装 .NET 8 SDK，也可用 Visual Studio 2022 打开 `SimpleUnlocker.sln` 直接编译全部三个工程（需勾选 ".NET 桌面开发" 工作负载）。
+>
+> `app.manifest` 是 csproj 引用的高 DPI 感知声明文件，保证深色面板在 2K/4K 高分屏上不模糊。它会被嵌入 exe，无需单独分发。
 
 ### 最终部署目录
 
@@ -147,7 +160,7 @@ dotnet publish -c Release
     └── config.ini         ← 由 GUI 启动时自动生成，无需手动放
 ```
 
-GUI 点"启动"时会自动把界面上的 FPS/FOV 值写入 `Plugins\config.ini`，所以无需手动编辑配置。
+GUI 点 "LAUNCH GAME" 时会自动把界面上的所有设置写入 `Plugins\config.ini`，所以无需手动编辑配置。
 
 ## 配置说明（config.ini）
 
@@ -158,7 +171,10 @@ GUI 点"启动"时会自动把界面上的 FPS/FOV 值写入 `Plugins\config.ini
 | `[VSync]` | 关闭垂直同步 | 1 |
 | `[FovUnlock]` | 是否改 FOV | 1 |
 | `[FovValue]` | 目标 FOV | 60.0 |
-| `[FovLimitCheck]` | FOV>30 才覆盖（保护过场） | 1 |
+| `[FovTransitionSpeed]` | FOV 平滑过渡速度（0=瞬切，0.05=丝滑） | 0.05 |
+| `[FovLimitCheck]` | FOV>30 才覆盖（保护过场/队伍特写） | 1 |
+| `[RemoveTeamAnim]` | 移除队伍切换动画 | 1 |
+| `[HideUID]` | 隐藏 UID 水印（隐私保护） | 1 |
 | `[DebugConsole]` | 弹控制台看日志 | 0 |
 
 修改 config.ini **无需重启游戏**，插件会自动热重载。
@@ -169,6 +185,10 @@ GUI 点"启动"时会自动把界面上的 FPS/FOV 值写入 `Plugins\config.ini
 2. **反检测**：`hk_GetFrameCount` 把游戏自报的帧计数钳回 60/45/30，骗过锁帧检测
 3. **FPS 解锁**：`hk_ChangeFov` 每帧调用 `SetFrameCount` 把目标帧率设成用户值
 4. **FOV 修改**：`hk_ChangeFov` 拦截 ChangeFOV 调用，把 value 参数改写成用户值后传给原函数
+5. **FOV 平滑过渡**：用 `g_CurrentFov` 全局变量每帧做线性插值（指数衰减）逼近目标值，切场景时丝滑拉开而非瞬切
+6. **特殊镜头保护**：FOV 修改只在 `value > 30` 时生效——队伍特写/过场动画时游戏会传入窄 FOV（<30），此时不覆盖，避免镜头穿帮
+7. **移除队伍动画**：`hk_OpenTeam` 拦截打开队伍的调用，改为直接调 `OpenTeamPage(false)` 跳过角色展示动画
+8. **隐藏 UID 水印**：主循环每 2 秒通过 `FindString + FindGameObject` 找到屏幕 UID 水印的 UI 对象，调 `SetActive(obj, false)` 隐藏。仅改本地显示，服务器侧真实 UID 不变
 
 ## 已知限制
 

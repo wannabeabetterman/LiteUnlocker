@@ -10,19 +10,99 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace UnlockerGUI;
 
 internal static class Program
 {
+    internal static readonly string RuntimeDir =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LiteUnlocker", "runtime");
+    internal static readonly string PluginsDir = Path.Combine(RuntimeDir, "Plugins");
+    internal static readonly string LauncherPath = Path.Combine(RuntimeDir, "Launcher.dll");
+
     [STAThread]
-    private static void Main() =>
-        Application.Run(new MainForm());
+    private static void Main()
+    {
+        try
+        {
+            EnsureBundledRuntime();
+            NativeLibrary.SetDllImportResolver(
+                Assembly.GetExecutingAssembly(),
+                (libraryName, assembly, searchPath) =>
+                    string.Equals(libraryName, "Launcher.dll", StringComparison.OrdinalIgnoreCase)
+                        ? NativeLibrary.Load(LauncherPath)
+                        : IntPtr.Zero);
+
+            Application.SetHighDpiMode(HighDpiMode.SystemAware);
+            Application.EnableVisualStyles();
+            Application.Run(new MainForm());
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                string logPath = Path.Combine(AppContext.BaseDirectory, "UnlockerGUI-error.log");
+                File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\r\n\r\n", new UTF8Encoding(false));
+            }
+            catch { /* best effort */ }
+
+            MessageBox.Show(ex.ToString(), "UnlockerGUI 启动异常", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private static void EnsureBundledRuntime()
+    {
+        Directory.CreateDirectory(RuntimeDir);
+        Directory.CreateDirectory(PluginsDir);
+
+        ExtractResource("Bundled.Launcher.dll", LauncherPath);
+        ExtractResource("Bundled.SimpleUnlocker.dll", Path.Combine(PluginsDir, "SimpleUnlocker.dll"));
+    }
+
+    private static void ExtractResource(string resourceName, string targetPath)
+    {
+        Assembly asm = Assembly.GetExecutingAssembly();
+        using Stream? input = asm.GetManifestResourceStream(resourceName);
+        if (input == null)
+            throw new InvalidOperationException($"缺少内嵌资源：{resourceName}");
+
+        using var ms = new MemoryStream();
+        input.CopyTo(ms);
+        byte[] bundledBytes = ms.ToArray();
+
+        bool needWrite = true;
+        if (File.Exists(targetPath))
+        {
+            byte[] existingBytes = File.ReadAllBytes(targetPath);
+            needWrite = !existingBytes.SequenceEqual(bundledBytes);
+        }
+
+        if (!needWrite) return;
+
+        string tempPath = targetPath + ".tmp";
+        File.WriteAllBytes(tempPath, bundledBytes);
+
+        if (File.Exists(targetPath))
+            File.Delete(targetPath);
+        File.Move(tempPath, targetPath);
+    }
+}
+
+internal enum LauncherState
+{
+    Idle,
+    Starting,
+    Running
 }
 
 internal sealed class MainForm : Form
@@ -54,62 +134,109 @@ internal sealed class MainForm : Form
     private readonly CheckBox _enableFps = new();
     private readonly CheckBox _enableFov = new();
     private readonly CheckBox _enableVSync = new();
+    private readonly CheckBox _enableRemoveTeamAnim = new();
+    private readonly CheckBox _enableHideUid = new();
     private readonly Button _startBtn = new();
     private readonly Label _statusLabel = new();
+    private readonly System.Windows.Forms.Timer _gameMonitorTimer = new();
+    private Process? _gameProcess;
+    private LauncherState _launcherState = LauncherState.Idle;
     private bool _configReady;
 
     public MainForm()
     {
-        Text = "SimpleUnlocker 启动器";
-        Width = 520;
-        Height = 400;
+        Text = "LiteUnlocker 启动器";
+        Width = 560;
+        Height = 540;
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
+        BackColor = Color.FromArgb(241, 250, 246);
+        Font = new Font("Microsoft YaHei UI", 9F);
 
         BuildUi();
         LoadConfig();
         WireAutoSave();
+        _gameMonitorTimer.Interval = 1500;
+        _gameMonitorTimer.Tick += (_, _) => RefreshGameState();
         _configReady = true;
+        DetectExistingGame();
     }
 
     private void BuildUi()
     {
-        int y = 15;
+        var header = new Panel
+        {
+            Left = 0,
+            Top = 0,
+            Width = ClientSize.Width,
+            Height = 76,
+            BackColor = Color.FromArgb(20, 83, 72)
+        };
+        header.Controls.Add(new Label
+        {
+            Text = "LiteUnlocker",
+            Left = 20,
+            Top = 13,
+            Width = 230,
+            Height = 30,
+            Font = new Font("Microsoft YaHei UI", 16F, FontStyle.Bold),
+            ForeColor = Color.White,
+            BackColor = Color.Transparent
+        });
+        header.Controls.Add(new Label
+        {
+            Text = "帧率解锁 · FOV 调整 · 体验优化",
+            Left = 22,
+            Top = 43,
+            Width = 360,
+            Height = 22,
+            ForeColor = Color.FromArgb(204, 251, 241),
+            BackColor = Color.Transparent
+        });
+        Controls.Add(header);
 
         // --- 游戏路径 ---
-        var lblGame = new Label { Text = "游戏路径：", Left = 15, Top = y, Width = 80 };
-        _gamePathBox.Left = 100; _gamePathBox.Top = y - 3; _gamePathBox.Width = 320;
-        var browseBtn = new Button { Text = "浏览…", Left = 425, Top = y - 4, Width = 65 };
+        var pathGroup = MakeGroup("游戏路径", 18, 88, 508, 70);
+        var lblGame = new Label { Text = "路径：", Left = 16, Top = 30, Width = 52 };
+        _gamePathBox.Left = 68; _gamePathBox.Top = 27; _gamePathBox.Width = 338;
+        var browseBtn = new Button { Text = "浏览…", Left = 416, Top = 25, Width = 72, Height = 28 };
+        StyleSecondaryButton(browseBtn);
         browseBtn.Click += OnBrowse;
-        y += 35;
+        pathGroup.Controls.AddRange(new Control[] { lblGame, _gamePathBox, browseBtn });
+        Controls.Add(pathGroup);
 
         // --- FPS ---
+        var fpsGroup = MakeGroup("帧率设置", 18, 166, 508, 72);
         _enableFps.Text = "解锁 FPS";
         _enableFps.Checked = true;
-        _enableFps.Left = 100; _enableFps.Top = y; _enableFps.Width = 90;
-        var lblFps = new Label { Text = "目标：", Left = 200, Top = y, Width = 40 };
-        _fpsBox.Left = 240; _fpsBox.Top = y - 3; _fpsBox.Width = 70;
+        _enableFps.Left = 16; _enableFps.Top = 31; _enableFps.Width = 100;
+        var lblFps = new Label { Text = "目标：", Left = 145, Top = 33, Width = 44 };
+        _fpsBox.Left = 190; _fpsBox.Top = 28; _fpsBox.Width = 76;
         _fpsBox.Minimum = 30; _fpsBox.Maximum = 360; _fpsBox.Value = 120; _fpsBox.Increment = 5;
-        var lblFpsUnit = new Label { Text = "FPS", Left = 315, Top = y, Width = 40 };
-        y += 30;
+        var lblFpsUnit = new Label { Text = "FPS", Left = 273, Top = 33, Width = 40 };
+        _enableVSync.Text = "关闭垂直同步";
+        _enableVSync.Checked = true;
+        _enableVSync.Left = 340; _enableVSync.Top = 31; _enableVSync.Width = 140;
+        fpsGroup.Controls.AddRange(new Control[] { _enableFps, lblFps, _fpsBox, lblFpsUnit, _enableVSync });
+        Controls.Add(fpsGroup);
 
         // --- FOV ---
+        var fovGroup = MakeGroup("视角设置", 18, 246, 508, 112);
         _enableFov.Text = "修改 FOV";
         _enableFov.Checked = true;
-        _enableFov.Left = 100; _enableFov.Top = y; _enableFov.Width = 90;
-        var lblFov = new Label { Text = "目标：", Left = 200, Top = y, Width = 40 };
-        _fovBox.Left = 240; _fovBox.Top = y - 3; _fovBox.Width = 70;
+        _enableFov.Left = 16; _enableFov.Top = 29; _enableFov.Width = 100;
+        var lblFov = new Label { Text = "目标：", Left = 145, Top = 31, Width = 44 };
+        _fovBox.Left = 190; _fovBox.Top = 26; _fovBox.Width = 76;
         _fovBox.Minimum = 20; _fovBox.Maximum = 120; _fovBox.Value = 60; _fovBox.DecimalPlaces = 1; _fovBox.Increment = 5;
-        var lblFovUnit = new Label { Text = "°", Left = 315, Top = y, Width = 20 };
-        y += 30;
+        var lblFovUnit = new Label { Text = "°", Left = 273, Top = 31, Width = 20 };
 
         // --- FOV 过渡速度滑块 ---
-        var lblSpeed = new Label { Text = "过渡速度：", Left = 100, Top = y + 4, Width = 75 };
-        _fovSpeedBar.Left = 180; _fovSpeedBar.Top = y; _fovSpeedBar.Width = 200;
+        var lblSpeed = new Label { Text = "过渡速度：", Left = 16, Top = 67, Width = 80 };
+        _fovSpeedBar.Left = 96; _fovSpeedBar.Top = 61; _fovSpeedBar.Width = 250;
         _fovSpeedBar.Minimum = 0; _fovSpeedBar.Maximum = 100; _fovSpeedBar.Value = 5;   // 默认 0.05
         _fovSpeedBar.TickFrequency = 10;
-        _fovSpeedVal.Left = 385; _fovSpeedVal.Top = y + 4; _fovSpeedVal.Width = 60;
+        _fovSpeedVal.Left = 356; _fovSpeedVal.Top = 67; _fovSpeedVal.Width = 54;
         _fovSpeedVal.Text = "0.05";
         // 滑块滚动时实时显示数值（value/100 = 实际比例）
         _fovSpeedBar.Scroll += (_, _) =>
@@ -117,39 +244,81 @@ internal sealed class MainForm : Form
         var lblSpeedHint = new Label
         {
             Text = "0=瞬切  0.05=丝滑(推荐)  1=立即",
-            Left = 100, Top = y + 26, Width = 380, ForeColor = System.Drawing.Color.Gray
+            Left = 96, Top = 89, Width = 380, ForeColor = Color.Gray
         };
-        y += 50;
+        fovGroup.Controls.AddRange(new Control[] {
+            _enableFov, lblFov, _fovBox, lblFovUnit,
+            lblSpeed, _fovSpeedBar, _fovSpeedVal, lblSpeedHint
+        });
+        Controls.Add(fovGroup);
 
-        // --- VSync ---
-        _enableVSync.Text = "关闭垂直同步 (解锁帧率时建议勾选)";
-        _enableVSync.Checked = true;
-        _enableVSync.Left = 100; _enableVSync.Top = y; _enableVSync.Width = 380;
-        y += 40;
+        // --- 体验优化 ---
+        var extraGroup = MakeGroup("体验优化", 18, 366, 508, 62);
+        _enableRemoveTeamAnim.Text = "移除队伍切换动画";
+        _enableRemoveTeamAnim.Left = 16; _enableRemoveTeamAnim.Top = 28; _enableRemoveTeamAnim.Width = 170;
+        _enableHideUid.Text = "隐藏 UID 水印";
+        _enableHideUid.Left = 220; _enableHideUid.Top = 28; _enableHideUid.Width = 160;
+        extraGroup.Controls.AddRange(new Control[] { _enableRemoveTeamAnim, _enableHideUid });
+        Controls.Add(extraGroup);
 
         // --- 启动按钮 ---
         _startBtn.Text = "▶  启动游戏";
-        _startBtn.Left = 100; _startBtn.Top = y; _startBtn.Width = 390; _startBtn.Height = 42;
-        _startBtn.Font = new System.Drawing.Font("Segoe UI", 11F, System.Drawing.FontStyle.Bold);
-        _startBtn.BackColor = System.Drawing.Color.FromArgb(70, 130, 180);
-        _startBtn.ForeColor = System.Drawing.Color.White;
-        _startBtn.FlatStyle = FlatStyle.Flat;
+        _startBtn.Left = 18; _startBtn.Top = 440; _startBtn.Width = 508; _startBtn.Height = 44;
+        _startBtn.Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold);
+        StylePrimaryButton();
         _startBtn.Click += OnStart;
-        y += 55;
 
         // --- 状态栏 ---
-        _statusLabel.Left = 15; _statusLabel.Top = y; _statusLabel.Width = 480; _statusLabel.Height = 40;
+        _statusLabel.Left = 20; _statusLabel.Top = 492; _statusLabel.Width = 500; _statusLabel.Height = 22;
         _statusLabel.Text = "就绪。";
+        _statusLabel.ForeColor = Color.FromArgb(21, 128, 61);
 
         Controls.AddRange(new Control[] {
-            lblGame, _gamePathBox, browseBtn,
-            _enableFps, lblFps, _fpsBox, lblFpsUnit,
-            _enableFov, lblFov, _fovBox, lblFovUnit,
-            lblSpeed, _fovSpeedBar, _fovSpeedVal, lblSpeedHint,
-            _enableVSync,
             _startBtn,
             _statusLabel
         });
+    }
+
+    private GroupBox MakeGroup(string text, int left, int top, int width, int height)
+    {
+        return new GroupBox
+        {
+            Text = text,
+            Left = left,
+            Top = top,
+            Width = width,
+            Height = height,
+            BackColor = Color.White,
+            ForeColor = Color.FromArgb(30, 92, 76),
+            Font = new Font("Microsoft YaHei UI", 9F)
+        };
+    }
+
+    private void StyleSecondaryButton(Button button)
+    {
+        button.BackColor = Color.FromArgb(220, 252, 231);
+        button.ForeColor = Color.FromArgb(20, 83, 45);
+        button.FlatStyle = FlatStyle.Flat;
+        button.FlatAppearance.BorderColor = Color.FromArgb(134, 239, 172);
+        button.UseVisualStyleBackColor = false;
+    }
+
+    private void StylePrimaryButton()
+    {
+        _startBtn.BackColor = Color.FromArgb(16, 185, 129);
+        _startBtn.ForeColor = Color.White;
+        _startBtn.FlatStyle = FlatStyle.Flat;
+        _startBtn.FlatAppearance.BorderSize = 0;
+        _startBtn.UseVisualStyleBackColor = false;
+    }
+
+    private void StyleDangerButton()
+    {
+        _startBtn.BackColor = Color.FromArgb(220, 38, 38);
+        _startBtn.ForeColor = Color.White;
+        _startBtn.FlatStyle = FlatStyle.Flat;
+        _startBtn.FlatAppearance.BorderSize = 0;
+        _startBtn.UseVisualStyleBackColor = false;
     }
 
     private void WireAutoSave()
@@ -160,6 +329,8 @@ internal sealed class MainForm : Form
         _fovBox.ValueChanged += (_, _) => TrySaveConfig();
         _fovSpeedBar.ValueChanged += (_, _) => TrySaveConfig();
         _enableVSync.CheckedChanged += (_, _) => TrySaveConfig();
+        _enableRemoveTeamAnim.CheckedChanged += (_, _) => TrySaveConfig();
+        _enableHideUid.CheckedChanged += (_, _) => TrySaveConfig();
         _gamePathBox.Leave += (_, _) => TrySaveConfig();
         FormClosing += (_, _) => TrySaveConfig();
     }
@@ -180,12 +351,37 @@ internal sealed class MainForm : Form
     }
 
     // ---- 启动 ----
-    private void OnStart(object? s, EventArgs e)
+    private async void OnStart(object? s, EventArgs e)
+    {
+        if (_launcherState == LauncherState.Running)
+        {
+            StopGame();
+            return;
+        }
+
+        if (_launcherState == LauncherState.Starting)
+        {
+            return;
+        }
+
+        await StartGameAsync();
+    }
+
+    private async Task StartGameAsync()
     {
         string gamePath = _gamePathBox.Text.Trim();
         if (string.IsNullOrEmpty(gamePath) || !File.Exists(gamePath))
         {
             SetStatus("✗ 请先选择有效的游戏 exe 路径", error: true);
+            return;
+        }
+
+        Process? existingProcess = FindGameProcess(gamePath, DateTime.MinValue);
+        if (existingProcess != null)
+        {
+            _gameProcess = existingProcess;
+            _gameMonitorTimer.Start();
+            SetLauncherState(LauncherState.Running, $"检测到游戏已在运行（进程 ID：{existingProcess.Id}），已切换为关闭模式。");
             return;
         }
 
@@ -201,42 +397,187 @@ internal sealed class MainForm : Form
         }
 
         // 2. 调用 Launcher.dll 启动并注入
-        SetStatus("正在启动并注入…");
-        _startBtn.Enabled = false;
+        SetLauncherState(LauncherState.Starting, "正在启动游戏…");
+        DateTime launchTime = DateTime.Now.AddSeconds(-2);
+
+        int ret;
+        string errorText;
         try
         {
-            var errorMsg = new StringBuilder(256);
-            // dllPath 参数保留未用，传空串；commandLineArgs 传空
-            int ret = LaunchGameAndInject(gamePath, "", "", errorMsg, 256);
-            if (ret == 0)
+            var result = await Task.Run(() =>
             {
-                SetStatus("✓ 启动成功，插件已注入。可在游戏中查看效果。");
-            }
-            else
-            {
-                SetStatus($"✗ 启动失败 (代码 {ret})：{errorMsg}", error: true);
-            }
+                var errorMsg = new StringBuilder(512);
+                // dllPath 参数保留未用，传空串；commandLineArgs 传空
+                int code = LaunchGameAndInject(gamePath, "", "", errorMsg, errorMsg.Capacity);
+                return (code, errorMsg.ToString());
+            });
+            ret = result.code;
+            errorText = result.Item2;
         }
         catch (DllNotFoundException)
         {
             SetStatus("✗ 找不到 Launcher.dll，请确保它与本程序在同一目录。", error: true);
+            SetLauncherState(LauncherState.Idle);
+            return;
         }
         catch (Exception ex)
         {
             SetStatus($"✗ 异常：{ex.Message}", error: true);
+            SetLauncherState(LauncherState.Idle);
+            return;
         }
-        finally
+
+        if (ret == 0)
         {
-            _startBtn.Enabled = true;
+            _gameProcess = FindGameProcess(gamePath, launchTime);
+            _gameMonitorTimer.Start();
+            SetLauncherState(LauncherState.Running,
+                _gameProcess == null
+                    ? "✓ 启动成功。未能自动绑定游戏进程，关闭按钮会再次查找。"
+                    : $"✓ 启动成功。进程 ID：{_gameProcess.Id}");
         }
+        else
+        {
+            SetStatus($"✗ 启动失败 (代码 {ret})：{errorText}", error: true);
+            SetLauncherState(LauncherState.Idle);
+        }
+    }
+
+    private void StopGame()
+    {
+        string gamePath = _gamePathBox.Text.Trim();
+        Process? process = GetLiveGameProcess();
+        process ??= !string.IsNullOrEmpty(gamePath) ? FindGameProcess(gamePath, DateTime.MinValue) : null;
+
+        if (process == null)
+        {
+            SetStatus("游戏进程已结束。");
+            SetLauncherState(LauncherState.Idle);
+            return;
+        }
+
+        try
+        {
+            SetStatus("正在关闭游戏…");
+            if (!process.CloseMainWindow() || !process.WaitForExit(3000))
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+
+            SetStatus("✓ 游戏已关闭。");
+            SetLauncherState(LauncherState.Idle);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"✗ 关闭游戏失败：{ex.Message}", error: true);
+        }
+    }
+
+    private void RefreshGameState()
+    {
+        if (_launcherState != LauncherState.Running) return;
+
+        Process? process = GetLiveGameProcess();
+        if (process != null) return;
+
+        _gameMonitorTimer.Stop();
+        _gameProcess = null;
+        SetLauncherState(LauncherState.Idle, "游戏已退出。");
+    }
+
+    private void DetectExistingGame()
+    {
+        string gamePath = _gamePathBox.Text.Trim();
+        if (string.IsNullOrEmpty(gamePath) || !File.Exists(gamePath)) return;
+
+        Process? existingProcess = FindGameProcess(gamePath, DateTime.MinValue);
+        if (existingProcess == null) return;
+
+        _gameProcess = existingProcess;
+        _gameMonitorTimer.Start();
+        SetLauncherState(LauncherState.Running, $"检测到游戏已在运行（进程 ID：{existingProcess.Id}）。");
+    }
+
+    private Process? GetLiveGameProcess()
+    {
+        try
+        {
+            if (_gameProcess != null && !_gameProcess.HasExited) return _gameProcess;
+        }
+        catch { /* process may have exited */ }
+
+        _gameProcess = null;
+        return null;
+    }
+
+    private Process? FindGameProcess(string gamePath, DateTime notBefore)
+    {
+        string exeName = Path.GetFileNameWithoutExtension(gamePath);
+        var candidates = Process.GetProcessesByName(exeName)
+            .Where(p =>
+            {
+                try { return !p.HasExited && p.StartTime >= notBefore; }
+                catch { return false; }
+            })
+            .OrderByDescending(p =>
+            {
+                try { return p.StartTime; }
+                catch { return DateTime.MinValue; }
+            })
+            .ToList();
+
+        foreach (Process p in candidates)
+        {
+            try
+            {
+                string? modulePath = p.MainModule?.FileName;
+                if (string.Equals(modulePath, gamePath, StringComparison.OrdinalIgnoreCase))
+                    return p;
+            }
+            catch
+            {
+                // 某些进程模块路径读取可能失败；下面会用启动时间兜底。
+            }
+        }
+
+        return candidates.FirstOrDefault();
+    }
+
+    private void SetLauncherState(LauncherState state, string? status = null)
+    {
+        _launcherState = state;
+        switch (state)
+        {
+            case LauncherState.Idle:
+                _startBtn.Enabled = true;
+                _startBtn.Text = "▶  启动游戏";
+                StylePrimaryButton();
+                _gameMonitorTimer.Stop();
+                _gameProcess = null;
+                break;
+            case LauncherState.Starting:
+                _startBtn.Enabled = false;
+                _startBtn.Text = "启动中…";
+                _startBtn.BackColor = Color.FromArgb(94, 151, 132);
+                break;
+            case LauncherState.Running:
+                _startBtn.Enabled = true;
+                _startBtn.Text = "■  关闭游戏";
+                StyleDangerButton();
+                break;
+        }
+
+        if (!string.IsNullOrEmpty(status))
+            SetStatus(status);
     }
 
     // ---- 写 Plugins\config.ini（格式与 Plugin\Config.cpp 读取逻辑一致）----
     private void WriteConfig()
     {
-        // config.ini 必须和 SimpleUnlocker.dll 同目录，即 exe 同级下的 Plugins\
-        string exeDir = AppContext.BaseDirectory;
-        string pluginsDir = Path.Combine(exeDir, "Plugins");
+        // config.ini 必须和 SimpleUnlocker.dll 同目录。
+        // 单 exe 分发时，DLL 会自动解包到 LocalAppData\LiteUnlocker\runtime\Plugins。
+        string pluginsDir = Program.PluginsDir;
         Directory.CreateDirectory(pluginsDir);
         string cfgPath = Path.Combine(pluginsDir, "config.ini");
 
@@ -271,13 +612,19 @@ internal sealed class MainForm : Form
         sb.AppendLine();
         sb.AppendLine("[FovLimitCheck]");
         sb.AppendLine("Value=1");
+        sb.AppendLine();
+        sb.AppendLine("[RemoveTeamAnim]");
+        sb.AppendLine($"Value={(_enableRemoveTeamAnim.Checked ? 1 : 0)}");
+        sb.AppendLine();
+        sb.AppendLine("[HideUID]");
+        sb.AppendLine($"Value={(_enableHideUid.Checked ? 1 : 0)}");
 
         File.WriteAllText(cfgPath, sb.ToString(), new UTF8Encoding(false));
     }
 
     private void LoadConfig()
     {
-        string cfgPath = Path.Combine(AppContext.BaseDirectory, "Plugins", "config.ini");
+        string cfgPath = Path.Combine(Program.PluginsDir, "config.ini");
         if (!File.Exists(cfgPath)) return;
 
         try
@@ -294,6 +641,8 @@ internal sealed class MainForm : Form
             int sliderValue = (int)Math.Round(speed * 100m);
             _fovSpeedBar.Value = Math.Clamp(sliderValue, _fovSpeedBar.Minimum, _fovSpeedBar.Maximum);
             _fovSpeedVal.Text = (_fovSpeedBar.Value / 100.0).ToString("0.00");
+            _enableRemoveTeamAnim.Checked = GetBool(values, "RemoveTeamAnim", _enableRemoveTeamAnim.Checked);
+            _enableHideUid.Checked = GetBool(values, "HideUID", _enableHideUid.Checked);
         }
         catch (Exception ex)
         {
@@ -352,6 +701,6 @@ internal sealed class MainForm : Form
     {
         _statusLabel.Text = text;
         _statusLabel.ForeColor = error ? System.Drawing.Color.FromArgb(200, 40, 40)
-                                       : System.Drawing.Color.FromArgb(40, 120, 40);
+                                       : Color.FromArgb(21, 128, 61);
     }
 }
