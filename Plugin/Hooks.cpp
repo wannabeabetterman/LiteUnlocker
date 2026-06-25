@@ -29,6 +29,11 @@ namespace Hooks {
     typedef int32_t (WINAPI* tChangeFov)(void*, float); // 游戏设置摄像机 FOV
     typedef int32_t (WINAPI* tSetSyncCount)(bool);      // 关闭垂直同步
 
+    // ===== 队伍界面相关（移除切换动画）=====
+    typedef void (WINAPI* tOpenTeam)();          // 打开队伍（被 hook 的入口）
+    typedef bool (WINAPI* tCheckCanEnter)();      // 检查当前能否进入队伍
+    typedef void (WINAPI* tOpenTeamPage)(bool);   // 直接打开队伍页面（跳过动画）
+
     // ===== 原函数地址（由 MinHook 在安装 hook 时填入）=====
     // 注意：这些必须是普通裸指针，因为 MH_CreateHook 的第三参数要求 void**，
     // MinHook 会把原始函数地址直接写到这里。不能用 std::atomic 包装（布局不符）。
@@ -36,6 +41,11 @@ namespace Hooks {
     static tSetFrameCount o_SetFrameCount = nullptr;
     static tChangeFov     o_ChangeFov     = nullptr;
     static tSetSyncCount  o_SetSyncCount  = nullptr;
+
+    // 队伍界面相关：OpenTeam 被 hook（o_ 存原始地址），另两个只扫描拿地址（p_）
+    static tOpenTeam       o_OpenTeam      = nullptr;
+    static tCheckCanEnter  p_CheckCanEnter = nullptr;
+    static tOpenTeamPage   p_OpenTeamPage  = nullptr;
 
     // 游戏主循环是否已就绪（ChangeFOV 第一次被调用即代表游戏跑起来了）
     static volatile bool g_GameUpdateInit = false;
@@ -50,6 +60,11 @@ namespace Hooks {
     static const char* PAT_SetFrameCount = "E8 ? ? ? ? E8 ? ? ? ? 83 F8 1F 0F 9C 05 ? ? ? ? 48 8B 05";
     static const char* PAT_ChangeFOV     = "40 53 48 83 EC 60 0F 29 74 24 ? 48 8B D9 0F 28 F1 E8 ? ? ? ? 48 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 48 8B C8";
     static const char* PAT_SetSyncCount  = "E8 ? ? ? ? E8 ? ? ? ? 89 C6 E8 ? ? ? ? 31 C9 89 F2 49 89 C0 E8 ? ? ? ? 48 89 C6 48 8B 0D ? ? ? ? 80 B9 ? ? ? ? ? 74 47 48 8B 3D ? ? ? ? 48 85 DF 74 4C";
+
+    // 队队界面相关特征码（均为绝对地址，直接指向函数开头，无需 ResolveRelative）
+    static const char* PAT_OpenTeam      = "48 83 EC ? 80 3D ? ? ? ? 00 75 ? 48 8B 0D ? ? ? ? 80 B9 ? ? ? ? 00 0F 84 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 84 C0 75";
+    static const char* PAT_CheckCanEnter = "56 48 81 ec 80 00 00 00 80 3d ? ? ? ? 00 0f 84 ? ? ? ? 80 3d ? ? ? ? 00";
+    static const char* PAT_OpenTeamPage  = "56 57 53 48 83 ec 20 89 cb 80 3d ? ? ? ? 00 74 7a 80 3d ? ? ? ? 00 48 8b 05";
 
     // SEH 保护下调用原函数，防止目标地址无效时整个崩掉
     template <typename Fn, typename... Args>
@@ -131,6 +146,27 @@ namespace Hooks {
     }
 
     // =========================================================
+    //  移除队伍切换动画 Hook：OpenTeam
+    // =========================================================
+    // 游戏打开队伍界面时本会播放一段"角色展示"过渡动画。
+    // 开启后直接调用 OpenTeamPage 跳过动画，立即显示队伍页面。
+    void WINAPI hk_OpenTeam() {
+        if (Config::Get().enable_remove_team_anim) {
+            if (p_CheckCanEnter && p_OpenTeamPage) {
+                bool canEnter = false;
+                SafeInvoke([&] { canEnter = p_CheckCanEnter(); });
+                if (canEnter) {
+                    // false = 不播放动画
+                    SafeInvoke([&] { p_OpenTeamPage(false); });
+                    return;
+                }
+            }
+        }
+        // 功能关闭或无法跳过时，走原始流程
+        if (o_OpenTeam) SafeInvoke(o_OpenTeam);
+    }
+
+    // =========================================================
     //  初始化：扫描 + 安装 hook
     // =========================================================
     bool Init() {
@@ -184,6 +220,27 @@ namespace Hooks {
                 o_SetSyncCount = reinterpret_cast<tSetSyncCount>(target);
                 std::cout << "[Unlocker] [OK] SetSyncCount resolved\n";
             }
+        }
+
+        // --- 5. OpenTeam（移除队伍切换动画）---
+        // 辅助函数：CheckCanEnter、OpenTeamPage（只扫描拿地址，不 hook）
+        void* scanCheck = Scanner::ScanMainMod(PAT_CheckCanEnter);
+        if (scanCheck) {
+            p_CheckCanEnter = reinterpret_cast<tCheckCanEnter>(scanCheck);
+            std::cout << "[Unlocker] [OK] CheckCanEnter resolved\n";
+        }
+        void* scanPage = Scanner::ScanMainMod(PAT_OpenTeamPage);
+        if (scanPage) {
+            p_OpenTeamPage = reinterpret_cast<tOpenTeamPage>(scanPage);
+            std::cout << "[Unlocker] [OK] OpenTeamPage resolved\n";
+        }
+        // 入口函数 OpenTeam（绝对地址 hook）
+        void* scanTeam = Scanner::ScanMainMod(PAT_OpenTeam);
+        if (scanTeam) {
+            MH_CreateHook(scanTeam, &hk_OpenTeam, reinterpret_cast<void**>(&o_OpenTeam));
+            std::cout << "[Unlocker] [OK] OpenTeam hooked\n";
+        } else {
+            std::cout << "[Unlocker] [WARN] 未找到 OpenTeam 特征码\n";
         }
 
         // 一次性启用所有已创建的 hook

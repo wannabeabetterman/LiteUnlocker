@@ -61,6 +61,9 @@ namespace Config {
         if (spd < 0.0f) spd = 0.0f;
         if (spd > 1.0f) spd = 1.0f;
         g_Config.fov_transition_speed = spd;
+
+        // UI 体验优化
+        g_Config.enable_remove_team_anim = ReadInt("RemoveTeamAnim", 0, file);
     }
 
 } // namespace Config

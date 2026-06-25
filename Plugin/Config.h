@@ -24,6 +24,9 @@ struct ModConfig {
     //   1.0  = 立即到达（等于无过渡）
     float fov_transition_speed = 0.05f; // [FovTransitionSpeed]
 
+    // --- UI 体验优化 ---
+    bool enable_remove_team_anim = false; // [RemoveTeamAnim] 移除队伍切换动画（直接显示队伍页）
+
     // --- 调试 ---
     bool debug_console = false;         // [DebugConsole]  是否弹控制台输出日志
 };

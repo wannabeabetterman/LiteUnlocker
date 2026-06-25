@@ -54,6 +54,7 @@ internal sealed class MainForm : Form
     private readonly CheckBox _enableFps = new();
     private readonly CheckBox _enableFov = new();
     private readonly CheckBox _enableVSync = new();
+    private readonly CheckBox _enableRemoveTeamAnim = new();
     private readonly Button _startBtn = new();
     private readonly Label _statusLabel = new();
     private bool _configReady;
@@ -62,7 +63,7 @@ internal sealed class MainForm : Form
     {
         Text = "SimpleUnlocker 启动器";
         Width = 520;
-        Height = 400;
+        Height = 430;
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -125,6 +126,12 @@ internal sealed class MainForm : Form
         _enableVSync.Text = "关闭垂直同步 (解锁帧率时建议勾选)";
         _enableVSync.Checked = true;
         _enableVSync.Left = 100; _enableVSync.Top = y; _enableVSync.Width = 380;
+        y += 30;
+
+        // --- 移除队伍切换动画 ---
+        _enableRemoveTeamAnim.Text = "移除队伍切换动画 (跳过角色展示，直接显示队伍页)";
+        _enableRemoveTeamAnim.Checked = true;
+        _enableRemoveTeamAnim.Left = 100; _enableRemoveTeamAnim.Top = y; _enableRemoveTeamAnim.Width = 380;
         y += 40;
 
         // --- 启动按钮 ---
@@ -147,6 +154,7 @@ internal sealed class MainForm : Form
             _enableFov, lblFov, _fovBox, lblFovUnit,
             lblSpeed, _fovSpeedBar, _fovSpeedVal, lblSpeedHint,
             _enableVSync,
+            _enableRemoveTeamAnim,
             _startBtn,
             _statusLabel
         });
@@ -160,6 +168,7 @@ internal sealed class MainForm : Form
         _fovBox.ValueChanged += (_, _) => TrySaveConfig();
         _fovSpeedBar.ValueChanged += (_, _) => TrySaveConfig();
         _enableVSync.CheckedChanged += (_, _) => TrySaveConfig();
+        _enableRemoveTeamAnim.CheckedChanged += (_, _) => TrySaveConfig();
         _gamePathBox.Leave += (_, _) => TrySaveConfig();
         FormClosing += (_, _) => TrySaveConfig();
     }
@@ -271,6 +280,9 @@ internal sealed class MainForm : Form
         sb.AppendLine();
         sb.AppendLine("[FovLimitCheck]");
         sb.AppendLine("Value=1");
+        sb.AppendLine();
+        sb.AppendLine("[RemoveTeamAnim]");
+        sb.AppendLine($"Value={(_enableRemoveTeamAnim.Checked ? 1 : 0)}");
 
         File.WriteAllText(cfgPath, sb.ToString(), new UTF8Encoding(false));
     }
@@ -294,6 +306,8 @@ internal sealed class MainForm : Form
             int sliderValue = (int)Math.Round(speed * 100m);
             _fovSpeedBar.Value = Math.Clamp(sliderValue, _fovSpeedBar.Minimum, _fovSpeedBar.Maximum);
             _fovSpeedVal.Text = (_fovSpeedBar.Value / 100.0).ToString("0.00");
+
+            _enableRemoveTeamAnim.Checked = GetBool(values, "RemoveTeamAnim", _enableRemoveTeamAnim.Checked);
         }
         catch (Exception ex)
         {
