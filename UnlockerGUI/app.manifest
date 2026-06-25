@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0" name="UnlockerGUI.app" />
+  <!-- 启动游戏/注入需要管理员权限；否则 CreateProcessW 会返回 Win32 740 -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
   <!-- 告诉 Windows 这是高 DPI 感知应用，深色面板在高分屏上不会模糊 -->
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
