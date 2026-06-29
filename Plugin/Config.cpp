@@ -65,6 +65,10 @@ namespace Config {
         // UI 体验优化
         g_Config.enable_remove_team_anim = ReadInt("RemoveTeamAnim", 0, file);
         g_Config.hide_uid               = ReadInt("HideUID", 0, file);
+
+        // 视觉效果
+        g_Config.disable_fog            = ReadInt("DisableFog", 0, file);
+        g_Config.disable_character_fade = ReadInt("DisableCharFade", 0, file);
     }
 
 } // namespace Config
