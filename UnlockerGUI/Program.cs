@@ -136,7 +136,10 @@ internal sealed class MainForm : Form
     private readonly CheckBox _enableVSync = new();
     private readonly CheckBox _enableRemoveTeamAnim = new();
     private readonly CheckBox _enableHideUid = new();
+    private readonly CheckBox _enableDisableFog = new();
+    private readonly CheckBox _enableDisableCharFade = new();
     private readonly Button _startBtn = new();
+    private readonly Button _diagBtn = new();
     private readonly Label _statusLabel = new();
     private readonly System.Windows.Forms.Timer _gameMonitorTimer = new();
     private Process? _gameProcess;
@@ -146,8 +149,8 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         Text = "LiteUnlocker 启动器";
-        Width = 560;
-        Height = 540;
+        // 固定客户区尺寸，避免标题栏和 DPI 缩放把底部状态栏裁掉。
+        ClientSize = new Size(544, 625);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -261,20 +264,37 @@ internal sealed class MainForm : Form
         extraGroup.Controls.AddRange(new Control[] { _enableRemoveTeamAnim, _enableHideUid });
         Controls.Add(extraGroup);
 
+        // --- 视觉效果 ---
+        var visualGroup = MakeGroup("视觉效果", 18, 440, 508, 62);
+        _enableDisableFog.Text = "关闭场景雾效";
+        _enableDisableFog.Left = 16; _enableDisableFog.Top = 28; _enableDisableFog.Width = 170;
+        _enableDisableCharFade.Text = "关闭角色半透明";
+        _enableDisableCharFade.Left = 220; _enableDisableCharFade.Top = 28; _enableDisableCharFade.Width = 170;
+        visualGroup.Controls.AddRange(new Control[] { _enableDisableFog, _enableDisableCharFade });
+        Controls.Add(visualGroup);
+
         // --- 启动按钮 ---
         _startBtn.Text = "▶  启动游戏";
-        _startBtn.Left = 18; _startBtn.Top = 440; _startBtn.Width = 508; _startBtn.Height = 44;
+        _startBtn.Left = 18; _startBtn.Top = 514; _startBtn.Width = 508; _startBtn.Height = 44;
         _startBtn.Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold);
         StylePrimaryButton();
         _startBtn.Click += OnStart;
 
         // --- 状态栏 ---
-        _statusLabel.Left = 20; _statusLabel.Top = 492; _statusLabel.Width = 500; _statusLabel.Height = 22;
+        _statusLabel.Left = 20; _statusLabel.Top = 566; _statusLabel.Width = 410; _statusLabel.Height = 22;
         _statusLabel.Text = "就绪。";
         _statusLabel.ForeColor = Color.FromArgb(21, 128, 61);
 
+        // --- 诊断按钮 ---
+        _diagBtn.Text = "特征码诊断";
+        _diagBtn.Left = 438; _diagBtn.Top = 564; _diagBtn.Width = 90; _diagBtn.Height = 26;
+        _diagBtn.Font = new Font("Microsoft YaHei UI", 8.5F);
+        StyleSecondaryButton(_diagBtn);
+        _diagBtn.Click += OnDiagnose;
+
         Controls.AddRange(new Control[] {
             _startBtn,
+            _diagBtn,
             _statusLabel
         });
     }
@@ -331,8 +351,91 @@ internal sealed class MainForm : Form
         _enableVSync.CheckedChanged += (_, _) => TrySaveConfig();
         _enableRemoveTeamAnim.CheckedChanged += (_, _) => TrySaveConfig();
         _enableHideUid.CheckedChanged += (_, _) => TrySaveConfig();
+        _enableDisableFog.CheckedChanged += (_, _) => TrySaveConfig();
+        _enableDisableCharFade.CheckedChanged += (_, _) => TrySaveConfig();
         _gamePathBox.Leave += (_, _) => TrySaveConfig();
         FormClosing += (_, _) => TrySaveConfig();
+    }
+
+    // ---- 特征码诊断：读取 Plugins\diag.json 并弹窗显示 ----
+    private void OnDiagnose(object? s, EventArgs e)
+    {
+        string diagPath = Path.Combine(Program.PluginsDir, "diag.json");
+        if (!File.Exists(diagPath))
+        {
+            MessageBox.Show(
+                "未找到诊断文件。\n\n请先点「启动游戏」，插件启动后会生成诊断结果。",
+                "特征码诊断", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            string json = File.ReadAllText(diagPath, Encoding.UTF8);
+            // 简易正则解析（diag.json 格式固定：name/feature/ok/note 字段）
+            var rows = new List<(string name, string feature, bool ok, string note)>();
+            var match = System.Text.RegularExpressions.Regex.Match(json,
+                @"""name"":""([^""]*)""[^}]*?""feature"":""([^""]*)""[^}]*?""ok"":(true|false)[^}]*?""note"":""([^""]*)""");
+            while (match.Success)
+            {
+                rows.Add((match.Groups[1].Value, match.Groups[2].Value,
+                          match.Groups[3].Value == "true", match.Groups[4].Value));
+                match = match.NextMatch();
+            }
+
+            if (rows.Count == 0)
+            {
+                MessageBox.Show("诊断文件为空或格式异常。", "特征码诊断",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            int okCount = rows.Count(r => r.ok);
+            int failCount = rows.Count - okCount;
+
+            // 用 ListView 显示表格结果
+            using var dlg = new Form
+            {
+                Text = $"特征码诊断  ({okCount} 成功 / {failCount} 失败)",
+                Width = 560, Height = 440,
+                StartPosition = FormStartPosition.CenterParent,
+                BackColor = Color.White
+            };
+            var lv = new ListView
+            {
+                Left = 12, Top = 12, Width = 520, Height = 340,
+                View = View.Details, FullRowSelect = true, GridLines = true,
+                Font = new Font("Microsoft YaHei UI", 9F)
+            };
+            lv.Columns.Add("状态", 56);
+            lv.Columns.Add("特征码", 150);
+            lv.Columns.Add("所属功能", 130);
+            lv.Columns.Add("类型", 150);
+            foreach (var r in rows)
+            {
+                var item = new ListViewItem(r.ok ? "✓ OK" : "✗ 失败");
+                item.ForeColor = r.ok ? Color.FromArgb(21, 128, 61) : Color.FromArgb(185, 28, 28);
+                item.SubItems.Add(r.name);
+                item.SubItems.Add(r.feature);
+                item.SubItems.Add(r.note);
+                lv.Items.Add(item);
+            }
+            var hint = new Label
+            {
+                Left = 12, Top = 360, Width = 520, Height = 32,
+                Text = failCount == 0
+                    ? "全部特征码生效，所有功能可用。"
+                    : $"有 {failCount} 个特征码失效，对应功能可能无法使用（通常因游戏版本更新）。需重新逆向定位。",
+                ForeColor = failCount == 0 ? Color.FromArgb(21, 128, 61) : Color.FromArgb(185, 28, 28)
+            };
+            dlg.Controls.AddRange(new Control[] { lv, hint });
+            dlg.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"读取诊断文件失败：{ex.Message}", "特征码诊断",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     // ---- 浏览选游戏 exe ----
@@ -381,7 +484,7 @@ internal sealed class MainForm : Form
         {
             _gameProcess = existingProcess;
             _gameMonitorTimer.Start();
-            SetLauncherState(LauncherState.Running, $"检测到游戏已在运行（进程 ID：{existingProcess.Id}），已切换为关闭模式。");
+            SetLauncherState(LauncherState.Running, "检测到游戏已在运行，已切换为关闭模式。");
             return;
         }
 
@@ -389,6 +492,11 @@ internal sealed class MainForm : Form
         try
         {
             WriteConfig();
+
+            // 避免诊断窗口误读上一次游戏运行留下的结果。
+            string oldDiagPath = Path.Combine(Program.PluginsDir, "diag.json");
+            if (File.Exists(oldDiagPath))
+                File.Delete(oldDiagPath);
         }
         catch (Exception ex)
         {
@@ -434,7 +542,7 @@ internal sealed class MainForm : Form
             SetLauncherState(LauncherState.Running,
                 _gameProcess == null
                     ? "✓ 启动成功。未能自动绑定游戏进程，关闭按钮会再次查找。"
-                    : $"✓ 启动成功。进程 ID：{_gameProcess.Id}");
+                    : "✓ 启动成功。");
         }
         else
         {
@@ -496,7 +604,7 @@ internal sealed class MainForm : Form
 
         _gameProcess = existingProcess;
         _gameMonitorTimer.Start();
-        SetLauncherState(LauncherState.Running, $"检测到游戏已在运行（进程 ID：{existingProcess.Id}）。");
+        SetLauncherState(LauncherState.Running, "检测到游戏已在运行。");
     }
 
     private Process? GetLiveGameProcess()
@@ -618,6 +726,12 @@ internal sealed class MainForm : Form
         sb.AppendLine();
         sb.AppendLine("[HideUID]");
         sb.AppendLine($"Value={(_enableHideUid.Checked ? 1 : 0)}");
+        sb.AppendLine();
+        sb.AppendLine("[DisableFog]");
+        sb.AppendLine($"Value={(_enableDisableFog.Checked ? 1 : 0)}");
+        sb.AppendLine();
+        sb.AppendLine("[DisableCharFade]");
+        sb.AppendLine($"Value={(_enableDisableCharFade.Checked ? 1 : 0)}");
 
         File.WriteAllText(cfgPath, sb.ToString(), new UTF8Encoding(false));
     }
@@ -643,6 +757,8 @@ internal sealed class MainForm : Form
             _fovSpeedVal.Text = (_fovSpeedBar.Value / 100.0).ToString("0.00");
             _enableRemoveTeamAnim.Checked = GetBool(values, "RemoveTeamAnim", _enableRemoveTeamAnim.Checked);
             _enableHideUid.Checked = GetBool(values, "HideUID", _enableHideUid.Checked);
+            _enableDisableFog.Checked = GetBool(values, "DisableFog", _enableDisableFog.Checked);
+            _enableDisableCharFade.Checked = GetBool(values, "DisableCharFade", _enableDisableCharFade.Checked);
         }
         catch (Exception ex)
         {

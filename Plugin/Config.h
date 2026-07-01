@@ -28,6 +28,10 @@ struct ModConfig {
     bool enable_remove_team_anim = false; // [RemoveTeamAnim] 移除队伍切换动画（直接显示队伍页）
     bool hide_uid = false;                // [HideUID] 隐藏屏幕上的 UID 水印（直播/截图保护隐私）
 
+    // --- 视觉效果 ---
+    bool disable_fog = false;             // [DisableFog] 关闭场景雾效（远景更清晰）
+    bool disable_character_fade = false;  // [DisableCharFade] 关闭角色穿模时的半透明效果
+
     // --- 调试 ---
     bool debug_console = false;         // [DebugConsole]  是否弹控制台输出日志
 };

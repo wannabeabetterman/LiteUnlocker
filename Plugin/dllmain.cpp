@@ -12,6 +12,7 @@
 #include <thread>
 #include <iostream>
 #include <cstdio>
+#include <ctime>
 #include <string>
 #include <fstream>
 
@@ -86,6 +87,33 @@ static void MainWorker(HMODULE hMod) {
         std::cout << "[Unlocker] [ERR] Hooks::Init 失败!\n";
         Log("Hooks::Init 失败");
         return;
+    }
+
+    // 3.5 把特征码诊断结果写成 diag.json（供 GUI 读取显示）
+    {
+        // diag.json 放在 unlocker.log 同目录（即 dll 所在的 Plugins 目录）
+        std::string diagPath = g_LogPath;
+        size_t slash = diagPath.find_last_of("\\/");
+        if (slash != std::string::npos) diagPath = diagPath.substr(0, slash + 1);
+        diagPath += "diag.json";
+
+        std::ofstream ofs(diagPath, std::ios::trunc);
+        if (ofs.is_open()) {
+            ofs << "{\"timestamp\":" << (long long)time(nullptr)
+                << ",\"results\":[";
+            const auto& diags = Hooks::GetDiagnostics();
+            for (size_t i = 0; i < diags.size(); ++i) {
+                if (i) ofs << ",";
+                // 手写 JSON 转义（字段不含特殊字符，无需复杂转义）
+                ofs << "{\"name\":\"" << diags[i].name << "\""
+                    << ",\"feature\":\"" << diags[i].feature << "\""
+                    << ",\"ok\":" << (diags[i].ok ? "true" : "false")
+                    << ",\"note\":\"" << diags[i].note << "\"}";
+            }
+            ofs << "]}";
+            ofs.close();
+            Log("诊断结果已写入 diag.json");
+        }
     }
 
     // 4. 等待游戏主循环就绪（ChangeFOV 第一次被调用）

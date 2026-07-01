@@ -43,6 +43,16 @@ namespace Hooks {
     typedef void* (WINAPI* tFindGameObject)(Il2CppString*);    // 按路径找 UI 对象
     typedef void (WINAPI* tSetActive)(void*, bool);           // 设置对象显示/隐藏
 
+    // ===== 视觉效果（关雾 / 关角色淡出）=====
+    typedef __int64 (*tDisplayFog)(__int64, __int64);               // 显示场景雾效
+    typedef void* (WINAPI* tPlayerPerspective)(void*, float, void*); // 角色透视/淡出
+
+    // 雾效数据缓冲（16字节对齐，防 SSE 指令崩溃）
+    struct SafeFogBuffer {
+        __declspec(align(16)) uint8_t data[64];
+        uint8_t padding[192];
+    };
+
     // ===== 原函数地址（由 MinHook 在安装 hook 时填入）=====
     // 注意：这些必须是普通裸指针，因为 MH_CreateHook 的第三参数要求 void**，
     // MinHook 会把原始函数地址直接写到这里。不能用 std::atomic 包装（布局不符）。
@@ -61,8 +71,23 @@ namespace Hooks {
     static tFindGameObject p_FindGameObject = nullptr;
     static tSetActive      p_SetActive      = nullptr;
 
+    // 视觉效果：DisplayFog / PlayerPerspective 都被 hook（o_ 存原始地址）
+    static tDisplayFog         o_DisplayFog         = nullptr;
+    static tPlayerPerspective  o_PlayerPerspective  = nullptr;
+    static SafeFogBuffer       g_FogBuf = { 0 };
+
     // 游戏主循环是否已就绪（ChangeFOV 第一次被调用即代表游戏跑起来了）
     static volatile bool g_GameUpdateInit = false;
+
+    // 特征码诊断结果收集（Init 时逐个填入）
+    static std::vector<DiagResult> g_Diagnostics;
+
+    const std::vector<DiagResult>& GetDiagnostics() { return g_Diagnostics; }
+
+    // 辅助：记录一条诊断结果
+    static void RecordDiag(const char* name, const char* feature, bool ok, const char* note) {
+        g_Diagnostics.push_back({ name, feature, ok, note });
+    }
 
     // FOV 平滑过渡用的"当前实际生效值"。
     // 改变 cfg.fov_value 后，g_CurrentFov 每帧朝它逼近一点，实现丝滑过渡。
@@ -84,6 +109,12 @@ namespace Hooks {
     static const char* PAT_FindString     = "56 48 83 ec 20 48 89 ce e8 ? ? ? ? 48 89 f1 89 c2 48 83 c4 20 5e e9 ? ? ? ? cc cc cc cc";
     static const char* PAT_FindGameObject = "40 53 48 83 EC ? 48 89 4C 24 ? 48 8D 54 24 ? 48 8D 4C 24 ? E8 ? ? ? ? 48 8B 08 48 85 C9 75 ? 48 8D 48 ? E8 ? ? ? ? 48 8B 4C 24 ? 48 8B D8 48 85 C9 74 ? 48 83 7C 24 ? 00 76";
     static const char* PAT_SetActive      = "E8 ? ? ? ? 48 8B 56 ? 48 85 D2 0F 84 ? ? ? ? 80 3D ? ? ? ? 0 0F 85 ? ? ? ? 48 89 D1 E8 ? ? ? ? 48 85 C0 0F 84 ? ? ? ? 48 89 C1";
+
+    // 视觉效果特征码
+    // DisplayFog：绝对地址（HOOK_DIR），雾参数处理函数
+    static const char* PAT_DisplayFog       = "0F B6 02 88 01 8B 42 04 89 41 04 F3 0F 10 52 ? F3 0F 10 4A ? F3 0F 10 42 ? 8B 42 08";
+    // PlayerPerspective：相对调用（HOOK_REL），角色透视/淡出
+    static const char* PAT_PlayerPerspective = "E8 ? ? ? ? 48 8B BE ? ? ? ? 80 3D ? ? ? ? ? 0F 85 ? ? ? ? 80 BE ? ? ? ? ? 74 11";
 
     // 屏幕上 UID 水印的 UI 路径（原仓库 GameStrings::UIDPathWatermark）
     static const char* UID_PATH_WATERMARK = "/BetaWatermarkCanvas(Clone)/Panel/TxtUID";
@@ -223,6 +254,37 @@ namespace Hooks {
     }
 
     // =========================================================
+    //  关闭场景雾效 Hook：DisplayFog
+    // =========================================================
+    // 雾效函数接收一个雾参数结构指针(a2)。开启后把参数复制到安全缓冲，
+    // 将首字节(雾开关标志)置 0，再用改造后的参数调用原函数，达到关雾效果。
+    __int64 hk_DisplayFog(__int64 a1, __int64 a2) {
+        if (Config::Get().disable_fog && a2) {
+            __int64 ret = 0;
+            SafeInvoke([&] {
+                memset(&g_FogBuf, 0, sizeof(g_FogBuf));
+                memcpy(g_FogBuf.data, (void*)a2, 64);
+                g_FogBuf.data[0] = 0;   // 关闭雾标志
+                if (o_DisplayFog) ret = o_DisplayFog(a1, reinterpret_cast<__int64>(g_FogBuf.data));
+            });
+            return ret;
+        }
+        return o_DisplayFog ? SafeInvoke(o_DisplayFog, a1, a2) : 0;
+    }
+
+    // =========================================================
+    //  关闭角色淡出 Hook：PlayerPerspective
+    // =========================================================
+    // 角色透视函数的第二个参数(a2)控制透明度(0~1)。
+    // 开启后强制设为 1.0（完全不透明），消除摄像机贴脸时角色变半透明的效果。
+    void* WINAPI hk_PlayerPerspective(void* a1, float a2, void* a3) {
+        if (Config::Get().disable_character_fade) {
+            a2 = 1.0f;
+        }
+        return o_PlayerPerspective ? SafeInvoke(o_PlayerPerspective, a1, a2, a3) : nullptr;
+    }
+
+    // =========================================================
     //  初始化：扫描 + 安装 hook
     // =========================================================
     bool Init() {
@@ -233,13 +295,22 @@ namespace Hooks {
             return false;
         }
 
+        bool getFrameHookCreated = false;
+        bool changeFovHookCreated = false;
+        bool openTeamHookCreated = false;
+        bool displayFogHookCreated = false;
+        bool playerPerspectiveHookCreated = false;
+
         // --- 1. GetFrameCount（相对调用 E8，需解析相对地址）---
         void* scanGet = Scanner::ScanMainMod(PAT_GetFrameCount);
         if (scanGet) {
             void* target = Scanner::ResolveRelative(scanGet, 1, 5);
             if (target) {
-                MH_CreateHook(target, &hk_GetFrameCount, reinterpret_cast<void**>(&o_GetFrameCount));
-                std::cout << "[Unlocker] [OK] GetFrameCount hooked\n";
+                MH_STATUS status = MH_CreateHook(
+                    target, &hk_GetFrameCount, reinterpret_cast<void**>(&o_GetFrameCount));
+                getFrameHookCreated = status == MH_OK;
+                std::cout << (getFrameHookCreated ? "[Unlocker] [OK] " : "[Unlocker] [ERR] ")
+                          << "GetFrameCount hook: " << MH_StatusToString(status) << "\n";
             } else {
                 std::cout << "[Unlocker] [WARN] GetFrameCount 特征码解析失败\n";
             }
@@ -262,8 +333,11 @@ namespace Hooks {
         // --- 3. ChangeFOV（直接绝对地址 hook）---
         void* scanFov = Scanner::ScanMainMod(PAT_ChangeFOV);
         if (scanFov) {
-            MH_CreateHook(scanFov, &hk_ChangeFov, reinterpret_cast<void**>(&o_ChangeFov));
-            std::cout << "[Unlocker] [OK] ChangeFOV hooked\n";
+            MH_STATUS status = MH_CreateHook(
+                scanFov, &hk_ChangeFov, reinterpret_cast<void**>(&o_ChangeFov));
+            changeFovHookCreated = status == MH_OK;
+            std::cout << (changeFovHookCreated ? "[Unlocker] [OK] " : "[Unlocker] [ERR] ")
+                      << "ChangeFOV hook: " << MH_StatusToString(status) << "\n";
         } else {
             std::cout << "[Unlocker] [WARN] 未找到 ChangeFOV 特征码\n";
         }
@@ -293,8 +367,11 @@ namespace Hooks {
         // 入口函数 OpenTeam（绝对地址 hook）
         void* scanTeam = Scanner::ScanMainMod(PAT_OpenTeam);
         if (scanTeam) {
-            MH_CreateHook(scanTeam, &hk_OpenTeam, reinterpret_cast<void**>(&o_OpenTeam));
-            std::cout << "[Unlocker] [OK] OpenTeam hooked\n";
+            MH_STATUS status = MH_CreateHook(
+                scanTeam, &hk_OpenTeam, reinterpret_cast<void**>(&o_OpenTeam));
+            openTeamHookCreated = status == MH_OK;
+            std::cout << (openTeamHookCreated ? "[Unlocker] [OK] " : "[Unlocker] [ERR] ")
+                      << "OpenTeam hook: " << MH_StatusToString(status) << "\n";
         } else {
             std::cout << "[Unlocker] [WARN] 未找到 OpenTeam 特征码\n";
         }
@@ -320,9 +397,56 @@ namespace Hooks {
             }
         }
 
+        // --- 7. DisplayFog（关闭场景雾效，绝对地址 hook）---
+        void* scanFog = Scanner::ScanMainMod(PAT_DisplayFog);
+        if (scanFog) {
+            MH_STATUS status = MH_CreateHook(
+                scanFog, &hk_DisplayFog, reinterpret_cast<void**>(&o_DisplayFog));
+            displayFogHookCreated = status == MH_OK;
+            std::cout << (displayFogHookCreated ? "[Unlocker] [OK] " : "[Unlocker] [ERR] ")
+                      << "DisplayFog hook: " << MH_StatusToString(status) << "\n";
+        } else {
+            std::cout << "[Unlocker] [WARN] 未找到 DisplayFog 特征码\n";
+        }
+
+        // --- 8. PlayerPerspective（关闭角色淡出，E8 相对调用型）---
+        void* scanPersp = Scanner::ScanMainMod(PAT_PlayerPerspective);
+        if (scanPersp) {
+            void* target = Scanner::ResolveRelative(scanPersp, 1, 5);
+            if (target) {
+                MH_STATUS status = MH_CreateHook(
+                    target, &hk_PlayerPerspective, reinterpret_cast<void**>(&o_PlayerPerspective));
+                playerPerspectiveHookCreated = status == MH_OK;
+                std::cout << (playerPerspectiveHookCreated ? "[Unlocker] [OK] " : "[Unlocker] [ERR] ")
+                          << "PlayerPerspective hook: " << MH_StatusToString(status) << "\n";
+            } else {
+                std::cout << "[Unlocker] [WARN] PlayerPerspective 相对地址解析失败\n";
+            }
+        } else {
+            std::cout << "[Unlocker] [WARN] 未找到 PlayerPerspective 特征码\n";
+        }
+
         // 一次性启用所有已创建的 hook
-        MH_EnableHook(MH_ALL_HOOKS);
-        std::cout << "[Unlocker] Hooks 初始化完成\n";
+        MH_STATUS enableStatus = MH_EnableHook(MH_ALL_HOOKS);
+        bool hooksEnabled = enableStatus == MH_OK;
+        std::cout << (hooksEnabled ? "[Unlocker] [OK] " : "[Unlocker] [ERR] ")
+                  << "启用 Hooks: " << MH_StatusToString(enableStatus) << "\n";
+
+        // 收集诊断结果：Hook 项必须同时创建成功且整体启用成功。
+        g_Diagnostics.clear();
+        RecordDiag("GetFrameCount",    "FPS解锁/反检测",  getFrameHookCreated && hooksEnabled, "相对调用(E8)");
+        RecordDiag("SetFrameCount",    "FPS解锁",         o_SetFrameCount != nullptr, "相对调用(E8)");
+        RecordDiag("ChangeFOV",        "FOV修改",         changeFovHookCreated && hooksEnabled, "绝对地址");
+        RecordDiag("SetSyncCount",     "FPS解锁(关VSync)", o_SetSyncCount != nullptr,  "相对调用(E8)");
+        RecordDiag("OpenTeam",         "移除队伍动画",     openTeamHookCreated && hooksEnabled, "绝对地址");
+        RecordDiag("CheckCanEnter",    "移除队伍动画",     p_CheckCanEnter != nullptr, "绝对地址");
+        RecordDiag("OpenTeamPage",     "移除队伍动画",     p_OpenTeamPage != nullptr,  "绝对地址");
+        RecordDiag("FindString",       "隐藏UID",         p_FindString != nullptr,    "绝对地址(引擎函数)");
+        RecordDiag("FindGameObject",   "隐藏UID",         p_FindGameObject != nullptr,"绝对地址(引擎函数)");
+        RecordDiag("SetActive",        "隐藏UID",         p_SetActive != nullptr,     "相对调用(引擎函数)");
+        RecordDiag("DisplayFog",       "关闭场景雾效",     displayFogHookCreated && hooksEnabled, "绝对地址");
+        RecordDiag("PlayerPerspective","关闭角色半透明",   playerPerspectiveHookCreated && hooksEnabled, "相对调用(E8)");
+
         return true;
     }
 
