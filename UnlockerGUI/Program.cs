@@ -149,8 +149,8 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         Text = "LiteUnlocker 启动器";
-        Width = 560;
-        Height = 625;
+        // 固定客户区尺寸，避免标题栏和 DPI 缩放把底部状态栏裁掉。
+        ClientSize = new Size(544, 625);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -360,11 +360,11 @@ internal sealed class MainForm : Form
     // ---- 特征码诊断：读取 Plugins\diag.json 并弹窗显示 ----
     private void OnDiagnose(object? s, EventArgs e)
     {
-        string diagPath = Path.Combine(AppContext.BaseDirectory, "Plugins", "diag.json");
+        string diagPath = Path.Combine(Program.PluginsDir, "diag.json");
         if (!File.Exists(diagPath))
         {
             MessageBox.Show(
-                "未找到诊断文件。\n\n请先点「启动游戏」注入插件，插件会在 Plugins\\diag.json 生成诊断结果。",
+                "未找到诊断文件。\n\n请先点「启动游戏」，插件启动后会生成诊断结果。",
                 "特征码诊断", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
@@ -484,7 +484,7 @@ internal sealed class MainForm : Form
         {
             _gameProcess = existingProcess;
             _gameMonitorTimer.Start();
-            SetLauncherState(LauncherState.Running, $"检测到游戏已在运行（进程 ID：{existingProcess.Id}），已切换为关闭模式。");
+            SetLauncherState(LauncherState.Running, "检测到游戏已在运行，已切换为关闭模式。");
             return;
         }
 
@@ -492,6 +492,11 @@ internal sealed class MainForm : Form
         try
         {
             WriteConfig();
+
+            // 避免诊断窗口误读上一次游戏运行留下的结果。
+            string oldDiagPath = Path.Combine(Program.PluginsDir, "diag.json");
+            if (File.Exists(oldDiagPath))
+                File.Delete(oldDiagPath);
         }
         catch (Exception ex)
         {
@@ -537,7 +542,7 @@ internal sealed class MainForm : Form
             SetLauncherState(LauncherState.Running,
                 _gameProcess == null
                     ? "✓ 启动成功。未能自动绑定游戏进程，关闭按钮会再次查找。"
-                    : $"✓ 启动成功。进程 ID：{_gameProcess.Id}");
+                    : "✓ 启动成功。");
         }
         else
         {
@@ -599,7 +604,7 @@ internal sealed class MainForm : Form
 
         _gameProcess = existingProcess;
         _gameMonitorTimer.Start();
-        SetLauncherState(LauncherState.Running, $"检测到游戏已在运行（进程 ID：{existingProcess.Id}）。");
+        SetLauncherState(LauncherState.Running, "检测到游戏已在运行。");
     }
 
     private Process? GetLiveGameProcess()

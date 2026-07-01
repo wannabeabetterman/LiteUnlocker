@@ -7,6 +7,10 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SimpleUnlocker", "Plugin\SimpleUnlocker.vcxproj", "{A1B2C3D4-1234-5678-9ABC-DEF012345678}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UnlockerGUI", "UnlockerGUI\UnlockerGUI.csproj", "{C3D4E5F6-3456-789A-BCDE-F23456789012}"
+	ProjectSection(ProjectDependencies) = postProject
+		{B2C3D4E5-2345-6789-ABCD-EF1234567890} = {B2C3D4E5-2345-6789-ABCD-EF1234567890}
+		{A1B2C3D4-1234-5678-9ABC-DEF012345678} = {A1B2C3D4-1234-5678-9ABC-DEF012345678}
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

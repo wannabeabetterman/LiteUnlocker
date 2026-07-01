@@ -23,9 +23,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 单 exe 分发：把运行时需要的 native DLL 嵌入 GUI，首次启动自动解包到 LocalAppData -->
-    <EmbeddedResource Include="..\exec\Launcher.dll" LogicalName="Bundled.Launcher.dll" />
-    <EmbeddedResource Include="..\exec\Plugins\SimpleUnlocker.dll" LogicalName="Bundled.SimpleUnlocker.dll" />
+    <!--
+      直接嵌入本次原生编译产物，避免 exec 中残留的旧 DLL 被悄悄打进发布包。
+      SimpleUnlocker.sln 已声明 GUI 依赖两个原生项目，构建解决方案时会先生成它们。
+    -->
+    <EmbeddedResource Include="..\build\Launcher.dll" LogicalName="Bundled.Launcher.dll" />
+    <EmbeddedResource Include="..\build\SimpleUnlocker.dll" LogicalName="Bundled.SimpleUnlocker.dll" />
   </ItemGroup>
 
 </Project>
