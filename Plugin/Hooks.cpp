@@ -486,10 +486,13 @@ namespace Hooks {
         }
 
         // --- 10. CraftEntry（随身合成台，绝对地址 hook）---
+        bool craftEntryHookCreated = false;
         void* scanCraftEntry = Scanner::ScanMainMod(PAT_CraftEntry);
         if (scanCraftEntry) {
-            MH_CreateHook(scanCraftEntry, &hk_CraftEntry, reinterpret_cast<void**>(&o_CraftEntry));
-            std::cout << "[Unlocker] [OK] CraftEntry hooked\n";
+            MH_STATUS status = MH_CreateHook(scanCraftEntry, &hk_CraftEntry, reinterpret_cast<void**>(&o_CraftEntry));
+            craftEntryHookCreated = status == MH_OK;
+            std::cout << (craftEntryHookCreated ? "[Unlocker] [OK] " : "[Unlocker] [ERR] ")
+                      << "CraftEntry hook: " << MH_StatusToString(status) << "\n";
         } else {
             std::cout << "[Unlocker] [WARN] 未找到 CraftEntry 特征码\n";
         }
@@ -514,8 +517,8 @@ namespace Hooks {
         RecordDiag("SetActive",        "隐藏UID",         p_SetActive != nullptr,     "相对调用(引擎函数)");
         RecordDiag("DisplayFog",       "关闭场景雾效",     displayFogHookCreated && hooksEnabled, "绝对地址");
         RecordDiag("PlayerPerspective","关闭角色半透明",   playerPerspectiveHookCreated && hooksEnabled, "相对调用(E8)");
-       RecordDiag("CraftPartner",     "随身合成台",       p_CraftPartner != nullptr,    "绝对地址");
-        RecordDiag("CraftEntry",       "随身合成台",       o_CraftEntry != nullptr,      "绝对地址");
+        RecordDiag("CraftPartner",     "随身合成台",       p_CraftPartner != nullptr,    "绝对地址");
+        RecordDiag("CraftEntry",       "随身合成台",       craftEntryHookCreated && hooksEnabled, "绝对地址");
 
         return true;
     }
