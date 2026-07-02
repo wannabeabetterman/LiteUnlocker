@@ -140,11 +140,13 @@ dotnet build -c Release
 
 ### 发布成单文件 exe（推荐，便于分发）
 
-```cmd
-cd /d D:\zhj\UnlockerGUI
-dotnet publish -c Release
+在仓库根目录运行一键发布脚本，它会先重新编译两个原生 DLL，再生成单文件，
+可避免把旧版 DLL 误打进发布包：
+
+```powershell
+.\build-release.ps1 -Version 1.0.0
 ```
-产物：`UnlockerGUI\bin\Release\net8.0-windows\win-x64\publish\UnlockerGUI.exe`（单文件、自包含，目标机无需装 .NET）
+产物：`dist\LiteUnlocker-v1.0.0-win-x64.exe`（单文件、自包含，目标机无需装 .NET）
 
 > 如果没装 .NET 8 SDK，也可用 Visual Studio 2022 打开 `SimpleUnlocker.sln` 直接编译全部三个工程（需勾选 ".NET 桌面开发" 工作负载）。
 >
