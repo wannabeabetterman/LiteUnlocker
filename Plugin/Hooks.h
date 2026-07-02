@@ -7,6 +7,7 @@ namespace Hooks {
     bool Init();                    // 安装所有 hook
     void Uninit();                  // 卸载 hook（通常进程退出时不必手动调用）
     bool IsGameUpdateInit();        // 游戏主循环是否已就绪
+    void RequestOpenCraft();        // 请求打开随身合成（由热键线程设置标志，主循环执行）
 
     // ===== 特征码诊断结果 =====
     struct DiagResult {

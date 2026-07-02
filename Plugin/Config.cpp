@@ -69,6 +69,10 @@ namespace Config {
         // 视觉效果
         g_Config.disable_fog            = ReadInt("DisableFog", 0, file);
         g_Config.disable_character_fade = ReadInt("DisableCharFade", 0, file);
+
+        // 随身合成台
+        g_Config.enable_redirect_craft_override = ReadInt("RedirectCraft", 0, file);
+        g_Config.craft_key                      = ReadInt("CraftKey", 0, file);
     }
 
 } // namespace Config

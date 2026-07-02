@@ -32,6 +32,10 @@ struct ModConfig {
     bool disable_fog = false;             // [DisableFog] 关闭场景雾效（远景更清晰）
     bool disable_character_fade = false;  // [DisableCharFade] 关闭角色穿模时的半透明效果
 
+    // --- 随身合成台 ---
+    bool enable_redirect_craft_override = false; // [RedirectCraft] 启用随身合成（热键+拦截合成台）
+    int  craft_key = 0;                          // [CraftKey] 随身合成热键（虚拟键码，0=不绑定）
+
     // --- 调试 ---
     bool debug_console = false;         // [DebugConsole]  是否弹控制台输出日志
 };

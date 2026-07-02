@@ -148,7 +148,21 @@ static void MainWorker(HMODULE hMod) {
             std::cout << "[Unlocker] 配置已热重载\n";
             lastWrite = GetFileLastWriteTime(configPath);
         }
-        Sleep(500);
+
+        // 随身合成台热键检测：游戏窗口聚焦 + 按下绑定的热键 → 设置标志（由主循环执行）
+        auto& cfg = Config::Get();
+        if (cfg.craft_key != 0) {
+            HWND hForeground = GetForegroundWindow();
+            DWORD foregroundPid = 0;
+            if (hForeground) GetWindowThreadProcessId(hForeground, &foregroundPid);
+            bool isFocused = (foregroundPid == GetCurrentProcessId());
+            if (isFocused && (GetAsyncKeyState(cfg.craft_key) & 0x8000)) {
+                Hooks::RequestOpenCraft();
+                Sleep(500);   // 防抖：避免长按连续触发
+            }
+        }
+
+        Sleep(100);
     }
 }
 
