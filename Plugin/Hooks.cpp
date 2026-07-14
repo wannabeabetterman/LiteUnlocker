@@ -16,6 +16,7 @@
 #include <iostream>
 #include <string>
 #include <type_traits>
+#include <atomic>
 
 #include "MinHook.h"
 #include "Scanner.h"
@@ -53,6 +54,10 @@ namespace Hooks {
         uint8_t padding[192];
     };
 
+    // ===== 随身合成台 =====
+    typedef void (WINAPI* tCraftEntry)(void*);                    // 游戏原本打开合成台的入口（被hook）
+    typedef bool (WINAPI* tCraftPartner)(Il2CppString*, void*, void*, void*, void*); // 直接打开合成界面
+
     // ===== 原函数地址（由 MinHook 在安装 hook 时填入）=====
     // 注意：这些必须是普通裸指针，因为 MH_CreateHook 的第三参数要求 void**，
     // MinHook 会把原始函数地址直接写到这里。不能用 std::atomic 包装（布局不符）。
@@ -75,6 +80,12 @@ namespace Hooks {
     static tDisplayFog         o_DisplayFog         = nullptr;
     static tPlayerPerspective  o_PlayerPerspective  = nullptr;
     static SafeFogBuffer       g_FogBuf = { 0 };
+
+    // 随身合成台：CraftEntry 被 hook（o_ 存原始地址），CraftPartner 只扫描拿地址（p_）
+    static tCraftEntry  o_CraftEntry  = nullptr;
+    static tCraftPartner p_CraftPartner = nullptr;
+    // 热键请求标志：热键线程置 true，主循环检测到后执行并清零（跨线程转发，避免 UI 跨线程崩溃）
+    static std::atomic<bool> g_RequestCraft{ false };
 
     // 游戏主循环是否已就绪（ChangeFOV 第一次被调用即代表游戏跑起来了）
     static volatile bool g_GameUpdateInit = false;
@@ -116,12 +127,19 @@ namespace Hooks {
     // PlayerPerspective：相对调用（HOOK_REL），角色透视/淡出
     static const char* PAT_PlayerPerspective = "E8 ? ? ? ? 48 8B BE ? ? ? ? 80 3D ? ? ? ? ? 0F 85 ? ? ? ? 80 BE ? ? ? ? ? 74 11";
 
+    // 随身合成台特征码（均为绝对地址）
+    static const char* PAT_CraftPartner = "41 57 41 56 41 55 41 54 56 57 55 53 48 81 EC ? ? ? ? 4D 89 ? 4C 89 C6 49 89 D4 49 89 CE";
+    static const char* PAT_CraftEntry   = "41 56 56 57 53 48 83 EC 58 49 89 CE 80 3D ? ? ? ? 00 0F 84 ? ? ? ? 80 3D ? ? ? ? 00 48 8B 0D ? ? ? ? 0F 85";
+    // 合成界面 UI 标识（原仓库 GameStrings::SynthesisPage）
+    static const char* SYNTHESIS_PAGE = "SynthesisPage";
+
     // 屏幕上 UID 水印的 UI 路径（原仓库 GameStrings::UIDPathWatermark）
     static const char* UID_PATH_WATERMARK = "/BetaWatermarkCanvas(Clone)/Panel/TxtUID";
 
-    // hk_ChangeFov 会把 ChangeFov 当作主循环调用隐藏 UID 逻辑；
+    // hk_ChangeFov 会把 ChangeFov 当作主循环调用隐藏 UID / 随身合成逻辑；
     // 函数实现在后面，所以这里先做前置声明。
     static void UpdateHideUID();
+    static void DoOpenCraft();
 
     // SEH 保护下调用原函数，防止目标地址无效时整个崩掉
     template <typename Fn, typename... Args>
@@ -166,6 +184,14 @@ namespace Hooks {
 
         // 主循环：定期隐藏 UID 水印（函数内部有 2 秒节流）
         UpdateHideUID();
+
+        // 随身合成台（路径A执行端）：检测热键线程设置的标志，在游戏主线程执行打开合成
+        if (g_RequestCraft.load()) {
+            g_RequestCraft.store(false);
+            if (cfg.enable_redirect_craft_override) {
+                DoOpenCraft();
+            }
+        }
 
         // --- FPS 解锁 ---
         // 关闭垂直同步（否则显示器刷新率会卡住帧率上限）
@@ -283,6 +309,31 @@ namespace Hooks {
         }
         return o_PlayerPerspective ? SafeInvoke(o_PlayerPerspective, a1, a2, a3) : nullptr;
     }
+
+    // =========================================================
+    //  随身合成台
+    // =========================================================
+    // 核心动作：找到"合成页面"UI标识，调用 CraftPartner 直接打开合成界面。
+    // 路径A（热键）和路径B（拦截合成台）共用此逻辑。
+    static void DoOpenCraft() {
+        if (!p_FindString || !p_CraftPartner) return;
+        SafeInvoke([&] {
+            Il2CppString* str = p_FindString(SYNTHESIS_PAGE);
+            if (str) p_CraftPartner(str, nullptr, nullptr, nullptr, nullptr);
+        });
+    }
+
+    // 路径B：拦截游戏原本的"打开合成台"动作，绕过位置检查直接打开界面
+    void WINAPI hk_CraftEntry(void* _this) {
+        if (Config::Get().enable_redirect_craft_override) {
+            DoOpenCraft();
+            return;   // 不调用原始 CraftEntry，绕过"必须站在合成台前"的检查
+        }
+        if (o_CraftEntry) SafeInvoke(o_CraftEntry, _this);
+    }
+
+    // 路径A：热键线程调用此函数设置标志（不直接执行，避免跨线程 UI 操作崩溃）
+    void RequestOpenCraft() { g_RequestCraft.store(true); }
 
     // =========================================================
     //  初始化：扫描 + 安装 hook
@@ -426,6 +477,27 @@ namespace Hooks {
             std::cout << "[Unlocker] [WARN] 未找到 PlayerPerspective 特征码\n";
         }
 
+        // --- 9. CraftPartner（随身合成台，绝对地址，只扫描拿地址）---
+        void* scanCraftPartner = Scanner::ScanMainMod(PAT_CraftPartner);
+        if (scanCraftPartner) {
+            p_CraftPartner = reinterpret_cast<tCraftPartner>(scanCraftPartner);
+            std::cout << "[Unlocker] [OK] CraftPartner resolved\n";
+        } else {
+            std::cout << "[Unlocker] [WARN] 未找到 CraftPartner 特征码\n";
+        }
+
+        // --- 10. CraftEntry（随身合成台，绝对地址 hook）---
+        bool craftEntryHookCreated = false;
+        void* scanCraftEntry = Scanner::ScanMainMod(PAT_CraftEntry);
+        if (scanCraftEntry) {
+            MH_STATUS status = MH_CreateHook(scanCraftEntry, &hk_CraftEntry, reinterpret_cast<void**>(&o_CraftEntry));
+            craftEntryHookCreated = status == MH_OK;
+            std::cout << (craftEntryHookCreated ? "[Unlocker] [OK] " : "[Unlocker] [ERR] ")
+                      << "CraftEntry hook: " << MH_StatusToString(status) << "\n";
+        } else {
+            std::cout << "[Unlocker] [WARN] 未找到 CraftEntry 特征码\n";
+        }
+
         // 一次性启用所有已创建的 hook
         MH_STATUS enableStatus = MH_EnableHook(MH_ALL_HOOKS);
         bool hooksEnabled = enableStatus == MH_OK;
@@ -446,6 +518,8 @@ namespace Hooks {
         RecordDiag("SetActive",        "隐藏UID",         p_SetActive != nullptr,     "相对调用(引擎函数)");
         RecordDiag("DisplayFog",       "关闭场景雾效",     displayFogHookCreated && hooksEnabled, "绝对地址");
         RecordDiag("PlayerPerspective","关闭角色半透明",   playerPerspectiveHookCreated && hooksEnabled, "相对调用(E8)");
+        RecordDiag("CraftPartner",     "随身合成台",       p_CraftPartner != nullptr,    "绝对地址");
+        RecordDiag("CraftEntry",       "随身合成台",       craftEntryHookCreated && hooksEnabled, "绝对地址");
 
         return true;
     }

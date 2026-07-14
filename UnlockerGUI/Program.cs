@@ -138,6 +138,8 @@ internal sealed class MainForm : Form
     private readonly CheckBox _enableHideUid = new();
     private readonly CheckBox _enableDisableFog = new();
     private readonly CheckBox _enableDisableCharFade = new();
+    private readonly CheckBox _enableRedirectCraft = new();
+    private readonly ComboBox _craftKeyCombo = new();
     private readonly Button _startBtn = new();
     private readonly Button _diagBtn = new();
     private readonly Label _statusLabel = new();
@@ -150,7 +152,7 @@ internal sealed class MainForm : Form
     {
         Text = "LiteUnlocker 启动器";
         // 固定客户区尺寸，避免标题栏和 DPI 缩放把底部状态栏裁掉。
-        ClientSize = new Size(544, 625);
+        ClientSize = new Size(544, 676);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -273,21 +275,35 @@ internal sealed class MainForm : Form
         visualGroup.Controls.AddRange(new Control[] { _enableDisableFog, _enableDisableCharFade });
         Controls.Add(visualGroup);
 
+        // --- 便利功能（随身合成台）---
+        var craftGroup = MakeGroup("便利功能", 18, 514, 508, 62);
+        _enableRedirectCraft.Text = "随身合成台";
+        _enableRedirectCraft.Left = 16; _enableRedirectCraft.Top = 28; _enableRedirectCraft.Width = 130;
+        var lblCraftKey = new Label { Text = "热键", Left = 170, Top = 32, Width = 36, Height = 20 };
+        _craftKeyCombo.Left = 210; _craftKeyCombo.Top = 28; _craftKeyCombo.Width = 100;
+        _craftKeyCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _craftKeyCombo.Font = new Font("Microsoft YaHei UI", 9F);
+        _craftKeyCombo.Items.AddRange(new object[] { "F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12" });
+        _craftKeyCombo.SelectedIndex = 11;  // 默认 F12
+        var lblCraftHint = new Label { Text = "（涉及游戏交互，风险较高）", Left = 320, Top = 32, Width = 180, Height = 20, ForeColor = Color.Gray };
+        craftGroup.Controls.AddRange(new Control[] { _enableRedirectCraft, lblCraftKey, _craftKeyCombo, lblCraftHint });
+        Controls.Add(craftGroup);
+
         // --- 启动按钮 ---
         _startBtn.Text = "▶  启动游戏";
-        _startBtn.Left = 18; _startBtn.Top = 514; _startBtn.Width = 508; _startBtn.Height = 44;
+        _startBtn.Left = 18; _startBtn.Top = 588; _startBtn.Width = 508; _startBtn.Height = 44;
         _startBtn.Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold);
         StylePrimaryButton();
         _startBtn.Click += OnStart;
 
         // --- 状态栏 ---
-        _statusLabel.Left = 20; _statusLabel.Top = 566; _statusLabel.Width = 410; _statusLabel.Height = 22;
+        _statusLabel.Left = 20; _statusLabel.Top = 640; _statusLabel.Width = 410; _statusLabel.Height = 22;
         _statusLabel.Text = "就绪。";
         _statusLabel.ForeColor = Color.FromArgb(21, 128, 61);
 
         // --- 诊断按钮 ---
         _diagBtn.Text = "特征码诊断";
-        _diagBtn.Left = 438; _diagBtn.Top = 564; _diagBtn.Width = 90; _diagBtn.Height = 26;
+        _diagBtn.Left = 438; _diagBtn.Top = 638; _diagBtn.Width = 90; _diagBtn.Height = 26;
         _diagBtn.Font = new Font("Microsoft YaHei UI", 8.5F);
         StyleSecondaryButton(_diagBtn);
         _diagBtn.Click += OnDiagnose;
@@ -353,6 +369,8 @@ internal sealed class MainForm : Form
         _enableHideUid.CheckedChanged += (_, _) => TrySaveConfig();
         _enableDisableFog.CheckedChanged += (_, _) => TrySaveConfig();
         _enableDisableCharFade.CheckedChanged += (_, _) => TrySaveConfig();
+        _enableRedirectCraft.CheckedChanged += (_, _) => TrySaveConfig();
+        _craftKeyCombo.SelectedIndexChanged += (_, _) => TrySaveConfig();
         _gamePathBox.Leave += (_, _) => TrySaveConfig();
         FormClosing += (_, _) => TrySaveConfig();
     }
@@ -732,6 +750,14 @@ internal sealed class MainForm : Form
         sb.AppendLine();
         sb.AppendLine("[DisableCharFade]");
         sb.AppendLine($"Value={(_enableDisableCharFade.Checked ? 1 : 0)}");
+        sb.AppendLine();
+        sb.AppendLine("[RedirectCraft]");
+        sb.AppendLine($"Value={(_enableRedirectCraft.Checked ? 1 : 0)}");
+        sb.AppendLine();
+        sb.AppendLine("[CraftKey]");
+        // F1=112 ... F12=123；未选中视为 0
+        int craftKey = _craftKeyCombo.SelectedIndex >= 0 ? 112 + _craftKeyCombo.SelectedIndex : 0;
+        sb.AppendLine($"Value={craftKey}");
 
         File.WriteAllText(cfgPath, sb.ToString(), new UTF8Encoding(false));
     }
@@ -759,6 +785,9 @@ internal sealed class MainForm : Form
             _enableHideUid.Checked = GetBool(values, "HideUID", _enableHideUid.Checked);
             _enableDisableFog.Checked = GetBool(values, "DisableFog", _enableDisableFog.Checked);
             _enableDisableCharFade.Checked = GetBool(values, "DisableCharFade", _enableDisableCharFade.Checked);
+            _enableRedirectCraft.Checked = GetBool(values, "RedirectCraft", _enableRedirectCraft.Checked);
+            int craftKeyVal = (int)GetDecimal(values, "CraftKey", 123);
+            _craftKeyCombo.SelectedIndex = (craftKeyVal >= 112 && craftKeyVal <= 123) ? craftKeyVal - 112 : 11;
         }
         catch (Exception ex)
         {
