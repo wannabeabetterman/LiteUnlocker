@@ -151,8 +151,8 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         Text = "LiteUnlocker 启动器";
-        Width = 560;
-        Height = 700;
+        // 固定客户区尺寸，避免标题栏和 DPI 缩放把底部状态栏裁掉。
+        ClientSize = new Size(544, 676);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;

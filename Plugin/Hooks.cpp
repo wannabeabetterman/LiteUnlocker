@@ -136,9 +136,10 @@ namespace Hooks {
     // 屏幕上 UID 水印的 UI 路径（原仓库 GameStrings::UIDPathWatermark）
     static const char* UID_PATH_WATERMARK = "/BetaWatermarkCanvas(Clone)/Panel/TxtUID";
 
-    // hk_ChangeFov 会把 ChangeFov 当作主循环调用隐藏 UID 逻辑；
+    // hk_ChangeFov 会把 ChangeFov 当作主循环调用隐藏 UID / 随身合成逻辑；
     // 函数实现在后面，所以这里先做前置声明。
     static void UpdateHideUID();
+    static void DoOpenCraft();
 
     // SEH 保护下调用原函数，防止目标地址无效时整个崩掉
     template <typename Fn, typename... Args>
