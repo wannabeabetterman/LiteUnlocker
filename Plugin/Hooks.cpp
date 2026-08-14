@@ -105,8 +105,8 @@ namespace Hooks {
     // 改变 cfg.fov_value 后，g_CurrentFov 每帧朝它逼近一点，实现丝滑过渡。
     static float g_CurrentFov = 45.0f;
 
-    // 游戏特征码（与原仓库 Patterns.h 完全一致）
-    // 理论上原神 7.0 之前版本可用，游戏更新后可能需要重新逆向
+    // 游戏特征码（与原仓库 Patterns.h 同步）
+    // 当前已适配游戏 7.0；游戏更新后可能需要重新逆向
     static const char* PAT_GetFrameCount = "E8 ? ? ? ? 85 C0 7E 0E E8 ? ? ? ? 0F 57 C0 F3 0F 2A C0 EB 08";
     static const char* PAT_SetFrameCount = "E8 ? ? ? ? E8 ? ? ? ? 83 F8 1F 0F 9C 05 ? ? ? ? 48 8B 05";
     static const char* PAT_ChangeFOV     = "40 53 48 83 EC 60 0F 29 74 24 ? 48 8B D9 0F 28 F1 E8 ? ? ? ? 48 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 48 8B C8";
@@ -536,7 +536,7 @@ namespace Hooks {
         RecordDiag("OpenTeamPage",     "移除队伍动画",     p_OpenTeamPage != nullptr,  "绝对地址");
         RecordDiag("FindString",       "隐藏UID",         p_FindString != nullptr,    "绝对地址(引擎函数)");
         RecordDiag("FindGameObject",   "隐藏UID",         p_FindGameObject != nullptr,"绝对地址(引擎函数)");
-        RecordDiag("SetActive",        "隐藏UID",         p_SetActive != nullptr,     "相对调用(引擎函数)");
+        RecordDiag("SetActive",        "隐藏UID",         p_SetActive != nullptr,     "固定offset(引擎函数)");
         RecordDiag("DisplayFog",       "关闭场景雾效",     displayFogHookCreated && hooksEnabled, "绝对地址");
         RecordDiag("PlayerPerspective","关闭角色半透明",   playerPerspectiveHookCreated && hooksEnabled, "相对调用(E8)");
         RecordDiag("CraftPartner",     "随身合成台",       p_CraftPartner != nullptr,    "绝对地址");
