@@ -8,6 +8,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>UnlockerGUI</RootNamespace>
     <AssemblyName>UnlockerGUI</AssemblyName>
+    <Version>1.4.0</Version>
+    <AssemblyVersion>1.4.0.0</AssemblyVersion>
+    <FileVersion>1.4.0.0</FileVersion>
 
     <!-- 发布：单文件 exe，不依赖系统装 .NET 运行时（自包含）-->
     <PublishSingleFile>true</PublishSingleFile>
@@ -20,6 +23,7 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <PlatformTarget>x64</PlatformTarget>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\LiteUnlocker.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,6 +33,7 @@
     -->
     <EmbeddedResource Include="..\build\Launcher.dll" LogicalName="Bundled.Launcher.dll" />
     <EmbeddedResource Include="..\build\SimpleUnlocker.dll" LogicalName="Bundled.SimpleUnlocker.dll" />
+    <EmbeddedResource Include="Assets\LiteUnlocker.ico" LogicalName="LiteUnlocker.AppIcon" />
   </ItemGroup>
 
 </Project>

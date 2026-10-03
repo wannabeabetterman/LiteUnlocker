@@ -3,9 +3,8 @@
 // 移植自 FufuLauncher.UnlockerIsland/Core/Hooks.cpp
 // 只保留 FPS / FOV 两个功能，删掉了 FreeCam/Paimon/隐藏UI/伤害数字等所有无关逻辑
 //
-// FPS 实现思路（7.0，与原仓库 6d335e2「取消钳位」后的版本一致）：
-//   1. hk_GetFrameCount 即游戏的 Application.targetFrameRate getter，
-//      解锁时直接返回目标帧率（旧版钳回 60/45/30 的做法已被原作者废弃）。
+// FPS 实现思路（与原仓库当前版本一致）：
+//   1. hk_GetFrameCount 可按配置返回 60/45/30 档位，减少检测弹窗。
 //   2. hk_ChangeFov 中每帧调用 SetFrameCount 把目标帧率设成用户值。
 //
 // 注意：CheckResistInBeyd（秘境检测）在原仓库里第一行就 return false，
@@ -48,6 +47,7 @@ namespace Hooks {
     // ===== 视觉效果（关雾 / 关角色淡出）=====
     typedef __int64 (*tDisplayFog)(__int64, __int64);               // 显示场景雾效
     typedef void* (WINAPI* tPlayerPerspective)(void*, float, void*); // 角色透视/淡出
+    typedef bool (WINAPI* tEventCamera)(void*, void*);               // 大招等事件镜头
 
     // 雾效数据缓冲（16字节对齐，防 SSE 指令崩溃）
     struct SafeFogBuffer {
@@ -80,6 +80,7 @@ namespace Hooks {
     // 视觉效果：DisplayFog / PlayerPerspective 都被 hook（o_ 存原始地址）
     static tDisplayFog         o_DisplayFog         = nullptr;
     static tPlayerPerspective  o_PlayerPerspective  = nullptr;
+    static tEventCamera        o_EventCamera        = nullptr;
     static SafeFogBuffer       g_FogBuf = { 0 };
 
     // 随身合成台：CraftEntry 被 hook（o_ 存原始地址），CraftPartner 只扫描拿地址（p_）
@@ -123,14 +124,35 @@ namespace Hooks {
     static const char* PAT_FindGameObject = "40 53 48 83 EC ? 48 89 4C 24 ? 48 8D 54 24 ? 48 8D 4C 24 ? E8 ? ? ? ? 48 8B 08 48 85 C9 75 ? 48 8D 48 ? E8 ? ? ? ? 48 8B 4C 24 ? 48 8B D8 48 85 C9 74 ? 48 83 7C 24 ? 00 76";
     // SetActive 在 7.0 不再用特征码（原调用点变了扫不到），改用 offset 直定位（原仓库 f894a71 提交）
     // 国服/国际服 7.0 的 SetActive offset 相同
-    static const uintptr_t OFFSET_SET_ACTIVE_CN = 0x13D8580;
-    static const uintptr_t OFFSET_SET_ACTIVE_OS = 0x13D8580;
+    static const uintptr_t OFFSET_SET_ACTIVE_CN = 0x1452EE0;
+    static const uintptr_t OFFSET_SET_ACTIVE_OS = 0x1451EE0;
+
+    // 版本更新后固定 offset 可能指向别的代码；核对函数开头，失配时禁用隐藏 UID。
+    static bool IsExpectedSetActive(void* address) {
+        if (!address) return false;
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!VirtualQuery(address, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
+            (mbi.Protect & PAGE_GUARD) ||
+            !(mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |
+                             PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) return false;
+        const uintptr_t begin = reinterpret_cast<uintptr_t>(address);
+        const uintptr_t end = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+        if (begin > end || end - begin < 16) return false;
+        const auto* p = static_cast<const unsigned char*>(address);
+        // 上游 7.x SetActive: 48 89 5C 24 ?? 57 48 83 EC 20 0F B6 FA 48 8B D9
+        return p[0] == 0x48 && p[1] == 0x89 && p[2] == 0x5C && p[3] == 0x24 &&
+               p[5] == 0x57 && p[6] == 0x48 && p[7] == 0x83 && p[8] == 0xEC &&
+               p[9] == 0x20 && p[10] == 0x0F && p[11] == 0xB6 && p[12] == 0xFA &&
+               p[13] == 0x48 && p[14] == 0x8B && p[15] == 0xD9;
+    }
 
     // 视觉效果特征码
     // DisplayFog：绝对地址（HOOK_DIR），雾参数处理函数
     static const char* PAT_DisplayFog       = "0F B6 02 88 01 8B 42 04 89 41 04 F3 0F 10 52 ? F3 0F 10 4A ? F3 0F 10 42 ? 8B 42 08";
     // PlayerPerspective：相对调用（HOOK_REL），角色透视/淡出
     static const char* PAT_PlayerPerspective = "E8 ? ? ? ? 48 8B BE ? ? ? ? 80 3D ? ? ? ? ? 0F 85 ? ? ? ? 80 BE ? ? ? ? ? 74 11";
+    // EventCamera：事件镜头入口。开启后跳过原函数，使大招保持普通战斗视角。
+    static const char* PAT_EventCamera = "41 57 41 56 56 57 55 53 48 83 EC 48 48 89 D7 49 89 CE 80 3D ? ? ? ? 00 0F 85 ? ? ? ? 80";
 
     // 随身合成台特征码（均为绝对地址）
     // CraftEntry 已适配游戏 7.0（原仓库 558efcd 提交）
@@ -164,22 +186,18 @@ namespace Hooks {
     // =========================================================
     //  反检测 Hook：GetFrameCount
     // =========================================================
-    // 游戏内部会读这个"帧计数"来判断当前帧率档位（30/45/60），
-    // 进而决定是否要触发锁帧逻辑。我们把它钳回标准档位，
-    // 让游戏的检测系统以为帧率没被改过。
+    // 游戏读取目标帧率时，按配置返回标准档位。
     int32_t WINAPI hk_GetFrameCount() {
         if (!o_GetFrameCount) return 60;
         int32_t ret = 60;
         SafeInvoke([&] { ret = o_GetFrameCount(); });
 
-        // 7.0 新逻辑（原仓库 6d335e2「取消钳位」提交）：
-        // 这个 getter 实际就是游戏的 Application.targetFrameRate。
-        // 旧版把它钳回 60/45/30 反而和自己设置的 SetFrameCount(目标帧率) 互相打架。
-        // 现在解锁时直接返回目标帧率，未解锁时返回原值。
+        // 与原仓库当前版本一致：按配置返回标准档位，避免帧率检测弹窗。
         auto& cfg = Config::Get();
-        if (cfg.enable_fps_override)
-            return cfg.selected_fps;
-
+        if (!cfg.enable_fps_clamp) return ret;
+        if (ret >= 60) return 60;
+        if (ret >= 45) return 45;
+        if (ret >= 30) return 30;
         return ret;
     }
 
@@ -321,6 +339,16 @@ namespace Hooks {
     }
 
     // =========================================================
+    //  关闭大招特写镜头 Hook：EventCamera
+    // =========================================================
+    // 返回 true 表示事件镜头已处理，但不调用游戏原函数，因此角色动作、
+    // 伤害和特效保持不变，镜头不会切换到大招特写。
+    bool WINAPI hk_EventCamera(void* a, void* b) {
+        if (Config::Get().disable_event_camera_move) return true;
+        return o_EventCamera ? SafeInvoke(o_EventCamera, a, b) : true;
+    }
+
+    // =========================================================
     //  随身合成台
     // =========================================================
     // 核心动作：找到"合成页面"UI标识，调用 CraftPartner 直接打开合成界面。
@@ -361,6 +389,7 @@ namespace Hooks {
         bool openTeamHookCreated = false;
         bool displayFogHookCreated = false;
         bool playerPerspectiveHookCreated = false;
+        bool eventCameraHookCreated = false;
 
         // --- 1. GetFrameCount（相对调用 E8，需解析相对地址）---
         void* scanGet = Scanner::ScanMainMod(PAT_GetFrameCount);
@@ -459,13 +488,13 @@ namespace Hooks {
             uintptr_t offset = isOS ? OFFSET_SET_ACTIVE_OS : OFFSET_SET_ACTIVE_CN;
 
             uintptr_t base = (uintptr_t)GetModuleHandle(NULL);
-            if (base && offset) {
+            if (base && offset && IsExpectedSetActive(reinterpret_cast<void*>(base + offset))) {
                 p_SetActive = reinterpret_cast<tSetActive>(base + offset);
                 std::cout << "[Unlocker] [OK] SetActive resolved via offset 0x"
                           << std::hex << offset << std::dec
                           << (isOS ? " (OS)" : " (CN)") << "\n";
             } else {
-                std::cout << "[Unlocker] [WARN] SetActive offset 解析失败\n";
+                std::cout << "[Unlocker] [WARN] SetActive offset 与当前游戏版本不匹配，隐藏 UID 已停用\n";
             }
         }
 
@@ -498,7 +527,19 @@ namespace Hooks {
             std::cout << "[Unlocker] [WARN] 未找到 PlayerPerspective 特征码\n";
         }
 
-        // --- 9. CraftPartner（随身合成台，绝对地址，只扫描拿地址）---
+        // --- 9. EventCamera（关闭大招等事件镜头，绝对地址 hook）---
+        void* scanEventCamera = Scanner::ScanMainMod(PAT_EventCamera);
+        if (scanEventCamera) {
+            MH_STATUS status = MH_CreateHook(
+                scanEventCamera, &hk_EventCamera, reinterpret_cast<void**>(&o_EventCamera));
+            eventCameraHookCreated = status == MH_OK;
+            std::cout << (eventCameraHookCreated ? "[Unlocker] [OK] " : "[Unlocker] [ERR] ")
+                      << "EventCamera hook: " << MH_StatusToString(status) << "\n";
+        } else {
+            std::cout << "[Unlocker] [WARN] 未找到 EventCamera 特征码，关闭大招特写镜头不可用\n";
+        }
+
+        // --- 10. CraftPartner（随身合成台，绝对地址，只扫描拿地址）---
         void* scanCraftPartner = Scanner::ScanMainMod(PAT_CraftPartner);
         if (scanCraftPartner) {
             p_CraftPartner = reinterpret_cast<tCraftPartner>(scanCraftPartner);
@@ -507,7 +548,7 @@ namespace Hooks {
             std::cout << "[Unlocker] [WARN] 未找到 CraftPartner 特征码\n";
         }
 
-        // --- 10. CraftEntry（随身合成台，绝对地址 hook）---
+        // --- 11. CraftEntry（随身合成台，绝对地址 hook）---
         bool craftEntryHookCreated = false;
         void* scanCraftEntry = Scanner::ScanMainMod(PAT_CraftEntry);
         if (scanCraftEntry) {
@@ -536,9 +577,10 @@ namespace Hooks {
         RecordDiag("OpenTeamPage",     "移除队伍动画",     p_OpenTeamPage != nullptr,  "绝对地址");
         RecordDiag("FindString",       "隐藏UID",         p_FindString != nullptr,    "绝对地址(引擎函数)");
         RecordDiag("FindGameObject",   "隐藏UID",         p_FindGameObject != nullptr,"绝对地址(引擎函数)");
-        RecordDiag("SetActive",        "隐藏UID",         p_SetActive != nullptr,     "固定offset(引擎函数)");
+        RecordDiag("SetActive",        "隐藏UID",         p_SetActive != nullptr,     "已验证固定offset(引擎函数)");
         RecordDiag("DisplayFog",       "关闭场景雾效",     displayFogHookCreated && hooksEnabled, "绝对地址");
         RecordDiag("PlayerPerspective","关闭角色半透明",   playerPerspectiveHookCreated && hooksEnabled, "相对调用(E8)");
+        RecordDiag("EventCamera",     "关闭大招特写镜头", eventCameraHookCreated && hooksEnabled, "绝对地址");
         RecordDiag("CraftPartner",     "随身合成台",       p_CraftPartner != nullptr,    "绝对地址");
         RecordDiag("CraftEntry",       "随身合成台",       craftEntryHookCreated && hooksEnabled, "绝对地址");
 
