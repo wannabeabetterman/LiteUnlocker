@@ -7,6 +7,7 @@
 struct ModConfig {
     // --- FPS 解锁 ---
     bool enable_fps_override = false;   // [FpsUnlock]     是否解锁帧率
+    bool enable_fps_clamp = true;       // [PreventDetectionPopup] 读取帧率时返回标准档位
     int  selected_fps        = 60;      // [TargetFps]     目标帧率
     bool enable_vsync_override = true;  // [VSync]         关闭垂直同步（解锁帧率时通常需要）
 
@@ -31,6 +32,7 @@ struct ModConfig {
     // --- 视觉效果 ---
     bool disable_fog = false;             // [DisableFog] 关闭场景雾效（远景更清晰）
     bool disable_character_fade = false;  // [DisableCharFade] 关闭角色穿模时的半透明效果
+    bool disable_event_camera_move = false; // [DisableCameraMove] 关闭大招等事件镜头移动
 
     // --- 随身合成台 ---
     bool enable_redirect_craft_override = false; // [RedirectCraft] 启用随身合成（热键+拦截合成台）

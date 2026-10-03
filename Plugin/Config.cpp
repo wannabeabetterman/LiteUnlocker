@@ -49,7 +49,10 @@ namespace Config {
         g_Config.debug_console         = ReadInt("DebugConsole",   0, file);
 
         g_Config.enable_fps_override   = ReadInt("FpsUnlock",      0, file);
+        g_Config.enable_fps_clamp      = ReadInt("PreventDetectionPopup", 1, file);
         g_Config.selected_fps          = ReadInt("TargetFps",      60, file);
+        if (g_Config.selected_fps < 1) g_Config.selected_fps = 60;
+        if (g_Config.selected_fps > 100000) g_Config.selected_fps = 100000;
         g_Config.enable_vsync_override = ReadInt("VSync",          1, file);
 
         g_Config.enable_fov_override   = ReadInt("FovUnlock",      0, file);
@@ -69,6 +72,7 @@ namespace Config {
         // 视觉效果
         g_Config.disable_fog            = ReadInt("DisableFog", 0, file);
         g_Config.disable_character_fade = ReadInt("DisableCharFade", 0, file);
+        g_Config.disable_event_camera_move = ReadInt("DisableCameraMove", 0, file);
 
         // 随身合成台
         g_Config.enable_redirect_craft_override = ReadInt("RedirectCraft", 0, file);
